@@ -16,8 +16,16 @@ export type User = {
     is_premium: boolean;
 };
 
+export type Usage = {
+    used: number;
+    limit: number;
+    remaining: number;
+    is_guest: boolean;
+};
+
 type AuthContextType = {
     user: User | null;
+    usage: Usage | null;
     loading: boolean;
     login: (email: string, password: string) => Promise<void>;
     register: (
@@ -28,18 +36,21 @@ type AuthContextType = {
     ) => Promise<void>;
     logout: () => Promise<void>;
     refreshUser: () => Promise<void>;
+    refreshUsage: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
     const [user, setUser] = useState<User | null>(null);
+    const [usage, setUsage] = useState<Usage | null>(null);
     const [loading, setLoading] = useState(true);
 
     async function refreshUser() {
         try {
-            const data = await apiFetch<User>("/auth/me/");
+            const data = await apiFetch<User & { usage?: Usage }>("/auth/me/");
             setUser(data);
+            if (data.usage) setUsage(data.usage);
         } catch {
             setUser(null);
         } finally {
@@ -47,8 +58,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
     }
 
+    async function refreshUsage() {
+        try {
+            const data = await apiFetch<Usage>("/usage/");
+            setUsage(data);
+        } catch {
+            // ignore
+        }
+    }
+
     useEffect(() => {
-        refreshUser();
+        refreshUser().then(() => refreshUsage());
     }, []);
 
     async function login(email: string, password: string) {
@@ -57,6 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             body: JSON.stringify({ email, password }),
         });
         setUser(data);
+        await refreshUsage();
     }
 
     async function register(
@@ -69,18 +90,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             method: "POST",
             body: JSON.stringify({ email, username, password, password_confirm }),
         });
-        // auto-login after register
         await login(email, password);
     }
 
     async function logout() {
         await apiFetch("/auth/logout/", { method: "POST" });
         setUser(null);
+        await refreshUsage();
     }
 
     return (
         <AuthContext.Provider
-            value={{ user, loading, login, register, logout, refreshUser }}
+            value={{
+                user,
+                usage,
+                loading,
+                login,
+                register,
+                logout,
+                refreshUser,
+                refreshUsage,
+            }}
         >
             {children}
         </AuthContext.Provider>

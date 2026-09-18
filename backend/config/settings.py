@@ -179,3 +179,8 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": crontab(minute="*/15"),  # every 15 minutes
     },
 }
+
+
+# Rate limits (files per day)
+GUEST_DAILY_LIMIT = 5
+USER_DAILY_LIMIT = 20

@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .tasks import merge_pdf_task, split_pdf_task
+from .rate_limit import check_and_increment_guest, check_and_increment_user, get_usage
 
 from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
@@ -131,11 +132,13 @@ def me(request):
             {"detail": "Not authenticated."},
             status=status.HTTP_401_UNAUTHORIZED,
         )
+    usage = get_usage(request)
     return Response({
         "id": request.user.id,
         "email": request.user.email,
         "username": request.user.username,
         "is_premium": request.user.is_premium,
+        "usage": usage,
     })
 
 
@@ -146,11 +149,12 @@ def me(request):
 def merge_pdf(request):
     """
     Accept multiple PDF files, save them, enqueue a Celery task,
-    and return the Job immediately (status = pending/processing).
+    and return the Job immediately (status = pending).
     """
     import uuid
     from pathlib import Path
     from django.conf import settings
+    from .tasks import merge_pdf_task
 
     files = request.FILES.getlist("files")
     if not files:
@@ -162,6 +166,23 @@ def merge_pdf(request):
         return Response(
             {"detail": "Please upload at least 2 PDF files to merge."},
             status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Rate limit check
+    if request.user.is_authenticated:
+        allowed, used, limit = check_and_increment_user(request.user)
+    else:
+        allowed, used, limit = check_and_increment_guest(request)
+
+    if not allowed:
+        return Response(
+            {
+                "detail": f"Daily limit reached ({limit} files/day). "
+                          f"{'Sign up for more.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
+                "used": used,
+                "limit": limit,
+            },
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
         )
 
     # Save uploaded files
@@ -196,7 +217,6 @@ def merge_pdf(request):
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
-
 
 # ---------- Job status & download ----------
 
@@ -292,6 +312,23 @@ def split_pdf(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    # Rate limit check
+    if request.user.is_authenticated:
+        allowed, used, limit = check_and_increment_user(request.user)
+    else:
+        allowed, used, limit = check_and_increment_guest(request)
+
+    if not allowed:
+        return Response(
+            {
+                "detail": f"Daily limit reached ({limit} files/day). "
+                          f"{'Sign up for more.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
+                "used": used,
+                "limit": limit,
+            },
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
     mode = request.data.get("mode", "each")
     ranges = request.data.get("ranges", "")
 
@@ -316,3 +353,12 @@ def split_pdf(request):
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def usage(request):
+    """
+    Public endpoint. Returns the daily usage for the current
+    caller (guest by IP, or user if logged in).
+    """
+    return Response(get_usage(request))

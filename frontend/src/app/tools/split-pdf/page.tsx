@@ -3,6 +3,7 @@
 import { useState, ChangeEvent, DragEvent, useRef } from "react";
 import Link from "next/link";
 import { apiUpload, apiFetch } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 
 type Job = {
     id: string;
@@ -24,6 +25,7 @@ export default function SplitPdfPage() {
     const [error, setError] = useState<string | null>(null);
     const [dragActive, setDragActive] = useState(false);
     const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const { refreshUsage } = useAuth();
 
     function handleFileChange(e: ChangeEvent<HTMLInputElement>) {
         const f = e.target.files?.[0];
@@ -100,6 +102,7 @@ export default function SplitPdfPage() {
 
             const result = await apiUpload<Job>("/tools/split/", formData);
             setJob(result);
+            refreshUsage();
 
             if (result.status === "completed" || result.status === "failed") {
                 setLoading(false);
@@ -145,8 +148,8 @@ export default function SplitPdfPage() {
                             }}
                             onDragLeave={() => setDragActive(false)}
                             className={`border-2 border-dashed rounded-lg p-12 text-center cursor-pointer transition ${dragActive
-                                    ? "border-blue-500 bg-blue-50"
-                                    : "border-gray-300 bg-white hover:border-blue-400"
+                                ? "border-blue-500 bg-blue-50"
+                                : "border-gray-300 bg-white hover:border-blue-400"
                                 }`}
                             onClick={() => document.getElementById("file-input")?.click()}
                         >

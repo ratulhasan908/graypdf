@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 
 export default function Navbar() {
-    const { user, loading, logout } = useAuth();
+    const { user, usage, loading, logout, refreshUsage } = useAuth();
     const router = useRouter();
 
     async function handleLogout() {
@@ -21,6 +21,26 @@ export default function Navbar() {
                 </Link>
 
                 <div className="flex items-center gap-4">
+                    {/* Usage badge */}
+                    {usage && (
+                        <Link
+                            href={user ? "/dashboard" : "/register"}
+                            className={`text-xs px-3 py-1 rounded-full font-medium transition ${usage.remaining === 0
+                                ? "bg-red-100 text-red-700 hover:bg-red-200"
+                                : usage.remaining <= 2
+                                    ? "bg-yellow-100 text-yellow-800 hover:bg-yellow-200"
+                                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                                }`}
+                            title={
+                                usage.is_guest
+                                    ? "Sign up for 20 files/day"
+                                    : "Your daily usage"
+                            }
+                        >
+                            {usage.used}/{usage.limit} today
+                        </Link>
+                    )}
+
                     {loading ? null : user ? (
                         <>
                             <Link
@@ -29,7 +49,9 @@ export default function Navbar() {
                             >
                                 Dashboard
                             </Link>
-                            <span className="text-sm text-gray-400">{user.username}</span>
+                            <span className="text-sm text-gray-400 hidden sm:inline">
+                                {user.username}
+                            </span>
                             <button
                                 onClick={handleLogout}
                                 className="text-sm text-gray-700 hover:text-red-600"

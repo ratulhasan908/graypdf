@@ -3,6 +3,7 @@
 import { useState, ChangeEvent, DragEvent, useRef } from "react";
 import Link from "next/link";
 import { apiUpload, apiFetch } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 
 type Job = {
     id: string;
@@ -20,6 +21,7 @@ export default function MergePdfPage() {
     const [error, setError] = useState<string | null>(null);
     const [dragActive, setDragActive] = useState(false);
     const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const { refreshUsage } = useAuth();
 
     function addFiles(newFiles: FileList | null) {
         if (!newFiles) return;
@@ -94,6 +96,7 @@ export default function MergePdfPage() {
 
             const result = await apiUpload<Job>("/tools/merge/", formData);
             setJob(result);
+            refreshUsage();
 
             // If already completed (very fast job), stop. Otherwise poll.
             if (result.status === "completed" || result.status === "failed") {
@@ -138,8 +141,8 @@ export default function MergePdfPage() {
                             }}
                             onDragLeave={() => setDragActive(false)}
                             className={`border-2 border-dashed rounded-lg p-12 text-center cursor-pointer transition ${dragActive
-                                    ? "border-blue-500 bg-blue-50"
-                                    : "border-gray-300 bg-white hover:border-blue-400"
+                                ? "border-blue-500 bg-blue-50"
+                                : "border-gray-300 bg-white hover:border-blue-400"
                                 }`}
                             onClick={() => document.getElementById("file-input")?.click()}
                         >
