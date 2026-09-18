@@ -221,3 +221,103 @@ def split_pdf_task(self, job_id):
         job.error_message = str(e)
         job.save(update_fields=["status", "error_message"])
         return {"error": str(e)}
+
+
+
+@shared_task(bind=True)
+def compress_pdf_task(self, job_id):
+    """
+    Compress a PDF with Ghostscript.
+    Options: quality = 'screen' | 'ebook' | 'printer' | 'prepress' (default: 'ebook')
+    """
+    import subprocess
+    import shutil
+
+    try:
+        job = Job.objects.get(id=job_id)
+    except Job.DoesNotExist:
+        return {"error": "Job not found"}
+
+    try:
+        job.status = "processing"
+        job.save(update_fields=["status"])
+
+        upload_dir = Path(settings.MEDIA_ROOT) / "uploads"
+        output_dir = Path(settings.MEDIA_ROOT) / "outputs"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        if not job.input_files:
+            raise ValueError("No input file found.")
+
+        input_path = upload_dir / job.input_files[0]
+        if not input_path.exists():
+            raise FileNotFoundError(f"Input file missing: {input_path.name}")
+
+        quality = (job.options or {}).get("quality", "ebook")
+
+        # Ghostscript quality presets
+        gs_preset = {
+            "screen": "/screen",
+            "ebook": "/ebook",
+            "printer": "/printer",
+            "prepress": "/prepress",
+        }.get(quality, "/ebook")
+
+        output_name = f"{uuid.uuid4().hex}.pdf"
+        output_path = output_dir / output_name
+
+        # Find Ghostscript executable
+        gs_cmd = shutil.which("gswin64c") or shutil.which("gswin32c") or shutil.which("gs")
+        if not gs_cmd:
+            raise RuntimeError(
+                "Ghostscript not found. Install from ghostscript.com and add to PATH."
+            )
+
+        cmd = [
+            gs_cmd,
+            "-sDEVICE=pdfwrite",
+            "-dCompatibilityLevel=1.4",
+            f"-dPDFSETTINGS={gs_preset}",
+            "-dNOPAUSE",
+            "-dQUIET",
+            "-dBATCH",
+            f"-sOutputFile={output_path}",
+            str(input_path),
+        ]
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if result.returncode != 0:
+            raise RuntimeError(f"Ghostscript failed: {result.stderr[:500]}")
+
+        if not output_path.exists():
+            raise RuntimeError("Ghostscript produced no output.")
+
+        original_size = input_path.stat().st_size
+        compressed_size = output_path.stat().st_size
+        savings = 0
+        if original_size > 0:
+            savings = round((1 - compressed_size / original_size) * 100, 1)
+
+        job.status = "completed"
+        job.output_file = f"outputs/{output_name}"
+        job.completed_at = datetime.now()
+        job.options = {
+            **(job.options or {}),
+            "original_size": original_size,
+            "compressed_size": compressed_size,
+            "savings_percent": savings,
+        }
+        job.save(update_fields=["status", "output_file", "completed_at", "options"])
+
+        try:
+            os.remove(input_path)
+        except OSError:
+            pass
+
+        return {"status": "completed", "savings_percent": savings}
+
+    except Exception as e:
+        job.status = "failed"
+        job.error_message = str(e)
+        job.save(update_fields=["status", "error_message"])
+        return {"error": str(e)}
