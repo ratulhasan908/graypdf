@@ -40,7 +40,7 @@ export const tools: Tool[] = [
         name: "JPG to PDF",
         description: "Convert JPG images to PDF in seconds.",
         icon: "📷",
-        available: false,
+        available: true,
     },
     {
         slug: "rotate-pdf",

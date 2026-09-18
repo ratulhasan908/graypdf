@@ -500,3 +500,98 @@ def pdf_to_jpg_task(self, job_id):
         job.error_message = str(e)
         job.save(update_fields=["status", "error_message"])
         return {"error": str(e)}
+
+
+
+
+@shared_task(bind=True)
+def jpg_to_pdf_task(self, job_id):
+    """
+    Combine multiple images (JPG/PNG) into a single PDF.
+    Options:
+      - page_size: "A4" | "Letter" | "auto" (default: "auto")
+    """
+    import img2pdf
+
+    try:
+        job = Job.objects.get(id=job_id)
+    except Job.DoesNotExist:
+        return {"error": "Job not found"}
+
+    try:
+        job.status = "processing"
+        job.save(update_fields=["status"])
+
+        upload_dir = Path(settings.MEDIA_ROOT) / "uploads"
+        output_dir = Path(settings.MEDIA_ROOT) / "outputs"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        if not job.input_files:
+            raise ValueError("No input files found.")
+
+        input_paths = [upload_dir / name for name in job.input_files]
+        for p in input_paths:
+            if not p.exists():
+                raise FileNotFoundError(f"Input file missing: {p.name}")
+
+        options = job.options or {}
+        page_size = options.get("page_size", "auto")
+
+        # img2pdf page size presets (in points, 72 dpi)
+        # A4 = 595 x 842, Letter = 612 x 792
+        # "auto" → use image dimensions per page
+        output_name = f"{uuid.uuid4().hex}.pdf"
+        output_path = output_dir / output_name
+
+        convert_kwargs = {
+            "outputstream": None,  # set below
+        }
+
+        with open(output_path, "wb") as f:
+            if page_size == "A4":
+                layout_fn = img2pdf.get_layout_fun(
+                    (img2pdf.mm_to_pt(210), img2pdf.mm_to_pt(297))
+                )
+                img2pdf.convert(
+                    [str(p) for p in input_paths],
+                    outputstream=f,
+                    layout_fun=layout_fn,
+                )
+            elif page_size == "Letter":
+                layout_fn = img2pdf.get_layout_fun(
+                    (img2pdf.in_to_pt(8.5), img2pdf.in_to_pt(11))
+                )
+                img2pdf.convert(
+                    [str(p) for p in input_paths],
+                    outputstream=f,
+                    layout_fun=layout_fn,
+                )
+            else:
+                # auto — no layout_fun at all
+                img2pdf.convert(
+                    [str(p) for p in input_paths],
+                    outputstream=f,
+                )
+
+        if not output_path.exists():
+            raise RuntimeError("img2pdf produced no output.")
+
+        job.status = "completed"
+        job.output_file = f"outputs/{output_name}"
+        job.completed_at = datetime.now()
+        job.save(update_fields=["status", "output_file", "completed_at"])
+
+        # Clean up inputs
+        for p in input_paths:
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+        return {"status": "completed", "images": len(input_paths)}
+
+    except Exception as e:
+        job.status = "failed"
+        job.error_message = str(e)
+        job.save(update_fields=["status", "error_message"])
+        return {"error": str(e)}

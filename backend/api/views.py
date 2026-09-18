@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from .tasks import merge_pdf_task, split_pdf_task, compress_pdf_task, rotate_pdf_task, pdf_to_jpg_task
+from .tasks import merge_pdf_task, split_pdf_task, compress_pdf_task, rotate_pdf_task, pdf_to_jpg_task, jpg_to_pdf_task
 from .rate_limit import check_and_increment_guest, check_and_increment_user, get_usage
 
 from django.conf import settings
@@ -573,6 +573,81 @@ def pdf_to_jpg(request):
     )
 
     pdf_to_jpg_task.delay(str(job.id))
+
+    serializer = JobSerializer(job, context={"request": request})
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def jpg_to_pdf(request):
+    """
+    Accept multiple images + page_size, enqueue jpg_to_pdf task.
+    """
+    import uuid
+    from pathlib import Path
+    from django.conf import settings
+    from .tasks import jpg_to_pdf_task
+
+    files = request.FILES.getlist("files")
+    if not files:
+        return Response(
+            {"detail": "No files uploaded."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    allowed_exts = (".jpg", ".jpeg", ".png")
+    for f in files:
+        if not f.name.lower().endswith(allowed_exts):
+            return Response(
+                {"detail": f"{f.name} is not a JPG or PNG file."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    # Rate limit
+    if request.user.is_authenticated:
+        allowed, used, limit = check_and_increment_user(request.user)
+    else:
+        allowed, used, limit = check_and_increment_guest(request)
+
+    if not allowed:
+        return Response(
+            {
+                "detail": f"Daily limit reached ({limit} files/day). "
+                          f"{'Sign up for more.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
+                "used": used,
+                "limit": limit,
+            },
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
+    page_size = request.data.get("page_size", "auto")
+    if page_size not in ("A4", "Letter", "auto"):
+        page_size = "auto"
+
+    # Save all uploaded images
+    upload_dir = Path(settings.MEDIA_ROOT) / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    saved_names = []
+    for f in files:
+        ext = Path(f.name).suffix.lower()
+        filename = f"{uuid.uuid4().hex}{ext}"
+        filepath = upload_dir / filename
+        with open(filepath, "wb+") as dest:
+            for chunk in f.chunks():
+                dest.write(chunk)
+        saved_names.append(filename)
+
+    job = Job.objects.create(
+        user=request.user if request.user.is_authenticated else None,
+        tool="jpg-to-pdf",
+        status="pending",
+        input_files=saved_names,
+        options={"page_size": page_size},
+    )
+
+    jpg_to_pdf_task.delay(str(job.id))
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
