@@ -42,6 +42,7 @@ class Job(models.Model):
         ("watermark", "Watermark PDF"),
         ("page-numbers", "Page Numbers"),
         ("organize", "Organize PDF"),
+        ("crop", "Crop PDF"),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

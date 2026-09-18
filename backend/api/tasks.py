@@ -1096,3 +1096,107 @@ def organize_pdf_task(self, job_id):
         job.error_message = str(e)
         job.save(update_fields=["status", "error_message"])
         return {"error": str(e)}
+
+
+
+
+@shared_task(bind=True)
+def crop_pdf_task(self, job_id):
+    """
+    Crop PDF pages by trimming margins.
+    Options:
+      - top, bottom, left, right: points (72pt = 1 inch)
+      - apply_to: "all" | "first" | "last"
+    The crop box shrinks from all four sides.
+    """
+    from pypdf import PdfReader, PdfWriter
+
+    try:
+        job = Job.objects.get(id=job_id)
+    except Job.DoesNotExist:
+        return {"error": "Job not found"}
+
+    try:
+        job.status = "processing"
+        job.save(update_fields=["status"])
+
+        upload_dir = Path(settings.MEDIA_ROOT) / "uploads"
+        output_dir = Path(settings.MEDIA_ROOT) / "outputs"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        if not job.input_files:
+            raise ValueError("No input file found.")
+
+        input_path = upload_dir / job.input_files[0]
+        if not input_path.exists():
+            raise FileNotFoundError(f"Input file missing: {input_path.name}")
+
+        options = job.options or {}
+        top = float(options.get("top", 0))
+        bottom = float(options.get("bottom", 0))
+        left = float(options.get("left", 0))
+        right = float(options.get("right", 0))
+        apply_to = options.get("apply_to", "all")
+
+        if top < 0 or bottom < 0 or left < 0 or right < 0:
+            raise ValueError("Crop amounts must be positive.")
+        if top + bottom <= 0 and left + right <= 0:
+            raise ValueError("Please specify at least one crop amount.")
+
+        reader = PdfReader(str(input_path))
+        total_pages = len(reader.pages)
+
+        # Determine which pages to crop
+        if apply_to == "first":
+            targets = {0}
+        elif apply_to == "last":
+            targets = {total_pages - 1}
+        else:
+            targets = set(range(total_pages))
+
+        writer = PdfWriter()
+        for idx, page in enumerate(reader.pages):
+            if idx in targets:
+                # mediabox = (left, bottom, right, top) in PDF coordinates
+                mb = page.mediabox
+                new_left = float(mb.left) + left
+                new_right = float(mb.right) - right
+                new_bottom = float(mb.bottom) + bottom
+                new_top = float(mb.top) - top
+
+                if new_right <= new_left or new_top <= new_bottom:
+                    raise ValueError(
+                        f"Crop too large for page {idx + 1} "
+                        f"(page is {float(mb.width):.0f}×{float(mb.height):.0f} pt)."
+                    )
+
+                # Set cropbox AND mediabox so most viewers respect it
+                page.cropbox.lower_left = (new_left, new_bottom)
+                page.cropbox.upper_right = (new_right, new_top)
+                page.mediabox.lower_left = (new_left, new_bottom)
+                page.mediabox.upper_right = (new_right, new_top)
+
+            writer.add_page(page)
+
+        output_name = f"{uuid.uuid4().hex}.pdf"
+        output_path = output_dir / output_name
+        with open(output_path, "wb") as f:
+            writer.write(f)
+
+        job.status = "completed"
+        job.output_file = f"outputs/{output_name}"
+        job.completed_at = datetime.now()
+        job.save(update_fields=["status", "output_file", "completed_at"])
+
+        try:
+            os.remove(input_path)
+        except OSError:
+            pass
+
+        return {"status": "completed", "pages": total_pages}
+
+    except Exception as e:
+        job.status = "failed"
+        job.error_message = str(e)
+        job.save(update_fields=["status", "error_message"])
+        return {"error": str(e)}

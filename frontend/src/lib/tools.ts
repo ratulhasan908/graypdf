@@ -89,7 +89,7 @@ export const tools: Tool[] = [
         name: "Crop PDF",
         description: "Crop margins or select specific areas.",
         icon: "✂️",
-        available: false,
+        available: true,
     },
 ];
 

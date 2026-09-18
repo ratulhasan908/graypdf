@@ -16,6 +16,7 @@ from .tasks import (
     watermark_pdf_task,
     page_numbers_task,
     organize_pdf_task,
+    crop_pdf_task,
 )
 from .rate_limit import check_and_increment_guest, check_and_increment_user, get_usage
 
@@ -1122,3 +1123,100 @@ def pdf_page_count(request):
             {"detail": f"Could not read PDF: {str(e)}"},
             status=status.HTTP_400_BAD_REQUEST,
         )
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def crop_pdf(request):
+    """
+    Accept 1 PDF + crop amounts, enqueue crop task.
+    """
+    import uuid
+    from pathlib import Path
+    from django.conf import settings
+    from .tasks import crop_pdf_task
+
+    files = request.FILES.getlist("files")
+    if len(files) != 1:
+        return Response(
+            {"detail": "Please upload exactly 1 PDF file."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    f = files[0]
+    if not f.name.lower().endswith(".pdf"):
+        return Response(
+            {"detail": f"{f.name} is not a PDF file."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Rate limit
+    if request.user.is_authenticated:
+        allowed, used, limit = check_and_increment_user(request.user)
+    else:
+        allowed, used, limit = check_and_increment_guest(request)
+
+    if not allowed:
+        return Response(
+            {
+                "detail": f"Daily limit reached ({limit} files/day). "
+                          f"{'Sign up for more.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
+                "used": used,
+                "limit": limit,
+            },
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
+    def to_float(v, default=0.0):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return default
+
+    top = to_float(request.data.get("top", 0))
+    bottom = to_float(request.data.get("bottom", 0))
+    left = to_float(request.data.get("left", 0))
+    right = to_float(request.data.get("right", 0))
+    apply_to = request.data.get("apply_to", "all")
+
+    if apply_to not in ("all", "first", "last"):
+        apply_to = "all"
+
+    if top < 0 or bottom < 0 or left < 0 or right < 0:
+        return Response(
+            {"detail": "Crop amounts must be positive."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if top + bottom <= 0 and left + right <= 0:
+        return Response(
+            {"detail": "Please specify at least one crop amount."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    upload_dir = Path(settings.MEDIA_ROOT) / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{uuid.uuid4().hex}.pdf"
+    filepath = upload_dir / filename
+    with open(filepath, "wb+") as dest:
+        for chunk in f.chunks():
+            dest.write(chunk)
+
+    job = Job.objects.create(
+        user=request.user if request.user.is_authenticated else None,
+        tool="crop",
+        status="pending",
+        input_files=[filename],
+        options={
+            "top": top,
+            "bottom": bottom,
+            "left": left,
+            "right": right,
+            "apply_to": apply_to,
+        },
+    )
+
+    crop_pdf_task.delay(str(job.id))
+
+    serializer = JobSerializer(job, context={"request": request})
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
