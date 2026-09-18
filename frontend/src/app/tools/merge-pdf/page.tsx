@@ -1,14 +1,14 @@
 "use client";
 
-import { useState, ChangeEvent, DragEvent } from "react";
+import { useState, ChangeEvent, DragEvent, useRef } from "react";
 import Link from "next/link";
-import { apiUpload, getApiBaseUrl } from "@/lib/api";
+import { apiUpload, apiFetch } from "@/lib/api";
 
 type Job = {
     id: string;
     tool: string;
-    status: string;
-    output_file: string;
+    status: "pending" | "processing" | "completed" | "failed";
+    output_file: string | null;
     download_url: string | null;
     error_message: string | null;
 };
@@ -19,6 +19,7 @@ export default function MergePdfPage() {
     const [job, setJob] = useState<Job | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [dragActive, setDragActive] = useState(false);
+    const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     function addFiles(newFiles: FileList | null) {
         if (!newFiles) return;
@@ -52,6 +53,31 @@ export default function MergePdfPage() {
         setFiles(next);
     }
 
+    function stopPolling() {
+        if (pollRef.current) {
+            clearInterval(pollRef.current);
+            pollRef.current = null;
+        }
+    }
+
+    function startPolling(jobId: string) {
+        stopPolling();
+        pollRef.current = setInterval(async () => {
+            try {
+                const updated = await apiFetch<Job>(`/jobs/${jobId}/status/`);
+                setJob(updated);
+                if (updated.status === "completed" || updated.status === "failed") {
+                    stopPolling();
+                    setLoading(false);
+                }
+            } catch (err: any) {
+                stopPolling();
+                setLoading(false);
+                setError(err.message || "Failed to check job status.");
+            }
+        }, 2000);
+    }
+
     async function handleMerge() {
         if (files.length < 2) {
             setError("Please select at least 2 PDF files.");
@@ -68,17 +94,25 @@ export default function MergePdfPage() {
 
             const result = await apiUpload<Job>("/tools/merge/", formData);
             setJob(result);
+
+            // If already completed (very fast job), stop. Otherwise poll.
+            if (result.status === "completed" || result.status === "failed") {
+                setLoading(false);
+            } else {
+                startPolling(result.id);
+            }
         } catch (err: any) {
             setError(err.message || "Merge failed.");
-        } finally {
             setLoading(false);
         }
     }
 
     function reset() {
+        stopPolling();
         setFiles([]);
         setJob(null);
         setError(null);
+        setLoading(false);
     }
 
     return (
@@ -93,9 +127,9 @@ export default function MergePdfPage() {
                     Combine PDFs in the order you want. Upload at least 2 files.
                 </p>
 
+                {/* Upload UI — shown only before job starts */}
                 {!job && (
                     <>
-                        {/* Drop zone */}
                         <div
                             onDrop={handleDrop}
                             onDragOver={(e) => {
@@ -123,7 +157,6 @@ export default function MergePdfPage() {
                             />
                         </div>
 
-                        {/* File list */}
                         {files.length > 0 && (
                             <div className="mt-6 bg-white rounded-lg shadow p-4">
                                 <p className="text-sm font-medium text-gray-700 mb-3">
@@ -140,7 +173,6 @@ export default function MergePdfPage() {
                                                 onClick={() => moveFile(i, -1)}
                                                 disabled={i === 0}
                                                 className="text-gray-500 hover:text-blue-600 disabled:opacity-30"
-                                                title="Move up"
                                             >
                                                 ↑
                                             </button>
@@ -148,14 +180,12 @@ export default function MergePdfPage() {
                                                 onClick={() => moveFile(i, 1)}
                                                 disabled={i === files.length - 1}
                                                 className="text-gray-500 hover:text-blue-600 disabled:opacity-30"
-                                                title="Move down"
                                             >
                                                 ↓
                                             </button>
                                             <button
                                                 onClick={() => removeFile(i)}
                                                 className="text-red-500 hover:text-red-700"
-                                                title="Remove"
                                             >
                                                 ✕
                                             </button>
@@ -165,25 +195,36 @@ export default function MergePdfPage() {
                             </div>
                         )}
 
-                        {/* Error */}
                         {error && (
                             <div className="mt-4 bg-red-50 text-red-600 p-3 rounded text-sm">
                                 {error}
                             </div>
                         )}
 
-                        {/* Merge button */}
                         <button
                             onClick={handleMerge}
                             disabled={files.length < 2 || loading}
                             className="mt-6 w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 rounded transition disabled:opacity-50"
                         >
-                            {loading ? "Merging..." : `Merge ${files.length} PDFs`}
+                            {loading ? "Uploading..." : `Merge ${files.length} PDFs`}
                         </button>
                     </>
                 )}
 
-                {/* Result */}
+                {/* Processing state */}
+                {job && (job.status === "pending" || job.status === "processing") && (
+                    <div className="bg-white rounded-lg shadow p-12 text-center">
+                        <div className="inline-block animate-spin rounded-full h-12 w-12 border-4 border-blue-600 border-t-transparent mb-4"></div>
+                        <h2 className="text-xl font-bold mb-2">
+                            {job.status === "pending" ? "Queued..." : "Merging..."}
+                        </h2>
+                        <p className="text-gray-500">
+                            Please wait. This usually takes a few seconds.
+                        </p>
+                    </div>
+                )}
+
+                {/* Completed */}
                 {job && job.status === "completed" && job.download_url && (
                     <div className="bg-white rounded-lg shadow p-8 text-center">
                         <div className="text-5xl mb-4">✅</div>
@@ -217,6 +258,12 @@ export default function MergePdfPage() {
                         >
                             Try again
                         </button>
+                    </div>
+                )}
+
+                {error && job && (
+                    <div className="mt-4 bg-red-50 text-red-600 p-3 rounded text-sm">
+                        {error}
                     </div>
                 )}
             </div>

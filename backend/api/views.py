@@ -143,9 +143,13 @@ def me(request):
 @permission_classes([AllowAny])
 def merge_pdf(request):
     """
-    Accept multiple PDF files, merge them in order, return a job with download URL.
+    Accept multiple PDF files, save them, enqueue a Celery task,
+    and return the Job immediately (status = pending/processing).
     """
-    from pypdf import PdfWriter, PdfReader
+    import uuid
+    from pathlib import Path
+    from django.conf import settings
+    from .tasks import merge_pdf_task
 
     files = request.FILES.getlist("files")
     if not files:
@@ -159,71 +163,38 @@ def merge_pdf(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    # Create Job record
-    job = Job.objects.create(
-        user=request.user if request.user.is_authenticated else None,
-        tool="merge",
-        status="processing",
-    )
-
     # Save uploaded files
     upload_dir = Path(settings.MEDIA_ROOT) / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
 
-    saved_paths = []
-    try:
-        for f in files:
-            if not f.name.lower().endswith(".pdf"):
-                raise ValueError(f"{f.name} is not a PDF file.")
+    saved_names = []
+    for f in files:
+        if not f.name.lower().endswith(".pdf"):
+            return Response(
+                {"detail": f"{f.name} is not a PDF file."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-            ext = ".pdf"
-            filename = f"{uuid.uuid4().hex}{ext}"
-            filepath = upload_dir / filename
-            with open(filepath, "wb+") as dest:
-                for chunk in f.chunks():
-                    dest.write(chunk)
-            saved_paths.append(filepath)
+        filename = f"{uuid.uuid4().hex}.pdf"
+        filepath = upload_dir / filename
+        with open(filepath, "wb+") as dest:
+            for chunk in f.chunks():
+                dest.write(chunk)
+        saved_names.append(filename)
 
-        # Merge
-        writer = PdfWriter()
-        for path in saved_paths:
-            reader = PdfReader(str(path))
-            for page in reader.pages:
-                writer.add_page(page)
+    # Create Job
+    job = Job.objects.create(
+        user=request.user if request.user.is_authenticated else None,
+        tool="merge",
+        status="pending",
+        input_files=saved_names,
+    )
 
-        output_dir = Path(settings.MEDIA_ROOT) / "outputs"
-        output_dir.mkdir(parents=True, exist_ok=True)
-        output_name = f"{uuid.uuid4().hex}.pdf"
-        output_path = output_dir / output_name
+    # Enqueue Celery task
+    merge_pdf_task.delay(str(job.id))
 
-        with open(output_path, "wb") as out:
-            writer.write(out)
-
-        # Update job
-        job.status = "completed"
-        job.input_files = [p.name for p in saved_paths]
-        job.output_file = f"outputs/{output_name}"
-        job.completed_at = datetime.now()
-        job.save()
-
-        serializer = JobSerializer(job, context={"request": request})
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-    except Exception as e:
-        job.status = "failed"
-        job.error_message = str(e)
-        job.save()
-        return Response(
-            {"detail": f"Merge failed: {str(e)}"},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-    finally:
-        # Clean up uploaded files immediately (they're not needed anymore)
-        for p in saved_paths:
-            try:
-                os.remove(p)
-            except OSError:
-                pass
+    serializer = JobSerializer(job, context={"request": request})
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
 # ---------- Job status & download ----------
