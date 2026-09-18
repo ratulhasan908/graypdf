@@ -34,7 +34,6 @@ class Job(models.Model):
         ("merge", "Merge PDF"),
         ("split", "Split PDF"),
         ("compress", "Compress PDF"),
-        # more tools added later
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -48,6 +47,7 @@ class Job(models.Model):
     tool = models.CharField(max_length=32, choices=TOOL_CHOICES)
     status = models.CharField(max_length=16, choices=STATUS_CHOICES, default="pending")
     input_files = models.JSONField(default=list)
+    options = models.JSONField(default=dict, blank=True)
     output_file = models.CharField(max_length=512, blank=True, null=True)
     error_message = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)

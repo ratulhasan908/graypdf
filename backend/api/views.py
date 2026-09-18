@@ -3,6 +3,8 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+from .tasks import merge_pdf_task, split_pdf_task
+
 from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
 from django.http import FileResponse
@@ -149,7 +151,6 @@ def merge_pdf(request):
     import uuid
     from pathlib import Path
     from django.conf import settings
-    from .tasks import merge_pdf_task
 
     files = request.FILES.getlist("files")
     if not files:
@@ -250,8 +251,68 @@ def job_download(request, job_id):
             status=status.HTTP_404_NOT_FOUND,
         )
 
+    # Choose extension + MIME based on tool
+    if job.tool == "split":
+        extension = "zip"
+        mime = "application/zip"
+    else:
+        extension = "pdf"
+        mime = "application/pdf"
+
     return FileResponse(
         open(file_path, "rb"),
         as_attachment=True,
-        filename=f"graypdf-{job.tool}-{job.id}.pdf",
+        filename=f"graypdf-{job.tool}-{job.id}.{extension}",
+        content_type=mime,
     )
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def split_pdf(request):
+    """
+    Accept 1 PDF + options (mode, ranges), enqueue split task.
+    """
+    import uuid
+    from pathlib import Path
+    from django.conf import settings
+    from .tasks import split_pdf_task
+
+    files = request.FILES.getlist("files")
+    if len(files) != 1:
+        return Response(
+            {"detail": "Please upload exactly 1 PDF file."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    f = files[0]
+    if not f.name.lower().endswith(".pdf"):
+        return Response(
+            {"detail": f"{f.name} is not a PDF file."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    mode = request.data.get("mode", "each")
+    ranges = request.data.get("ranges", "")
+
+    # Save file
+    upload_dir = Path(settings.MEDIA_ROOT) / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{uuid.uuid4().hex}.pdf"
+    filepath = upload_dir / filename
+    with open(filepath, "wb+") as dest:
+        for chunk in f.chunks():
+            dest.write(chunk)
+
+    job = Job.objects.create(
+        user=request.user if request.user.is_authenticated else None,
+        tool="split",
+        status="pending",
+        input_files=[filename],
+        options={"mode": mode, "ranges": ranges},
+    )
+
+    split_pdf_task.delay(str(job.id))
+
+    serializer = JobSerializer(job, context={"request": request})
+    return Response(serializer.data, status=status.HTTP_201_CREATED)

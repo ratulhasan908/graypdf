@@ -19,7 +19,7 @@ export const tools: Tool[] = [
         name: "Split PDF",
         description: "Separate one page or a whole set into independent PDFs.",
         icon: "✂️",
-        available: false,
+        available: true,
     },
     {
         slug: "compress-pdf",

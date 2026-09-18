@@ -115,3 +115,109 @@ def cleanup_old_files():
         "deleted_files": deleted_files,
         "deleted_jobs": deleted_jobs,
     }
+
+
+
+
+@shared_task(bind=True)
+def split_pdf_task(self, job_id):
+    """
+    Split a PDF. Expects job.input_files = [filename] and job.options.
+    Options:
+      - mode: "each" (one file per page) | "range"
+      - ranges: "1-3,5,7-9" (only if mode is "range")
+    Output: a single ZIP file containing the split PDFs.
+    """
+    import zipfile
+    from pypdf import PdfReader, PdfWriter
+
+    try:
+        job = Job.objects.get(id=job_id)
+    except Job.DoesNotExist:
+        return {"error": "Job not found"}
+
+    try:
+        job.status = "processing"
+        job.save(update_fields=["status"])
+
+        upload_dir = Path(settings.MEDIA_ROOT) / "uploads"
+        output_dir = Path(settings.MEDIA_ROOT) / "outputs"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        if not job.input_files:
+            raise ValueError("No input file found for this job.")
+
+        input_path = upload_dir / job.input_files[0]
+        if not input_path.exists():
+            raise FileNotFoundError(f"Input file missing: {input_path.name}")
+
+        reader = PdfReader(str(input_path))
+        total_pages = len(reader.pages)
+
+        # Build a list of page groups to write
+        options = job.options or {}
+        mode = options.get("mode", "each")
+        groups = []  # list of (label, [page_indices])
+
+        if mode == "each":
+            for i in range(total_pages):
+                groups.append((f"page-{i + 1}", [i]))
+        elif mode == "range":
+            ranges_str = options.get("ranges", "").strip()
+            if not ranges_str:
+                raise ValueError("No ranges provided.")
+            for part in ranges_str.split(","):
+                part = part.strip()
+                if "-" in part:
+                    start, end = part.split("-")
+                    start, end = int(start) - 1, int(end) - 1
+                    if start < 0 or end >= total_pages or start > end:
+                        raise ValueError(f"Invalid range: {part}")
+                    groups.append((f"{start + 1}-{end + 1}", list(range(start, end + 1))))
+                else:
+                    idx = int(part) - 1
+                    if idx < 0 or idx >= total_pages:
+                        raise ValueError(f"Invalid page: {part}")
+                    groups.append((f"{idx + 1}", [idx]))
+        else:
+            raise ValueError(f"Unknown split mode: {mode}")
+
+        # Write each group to a separate PDF, then zip them
+        zip_name = f"{uuid.uuid4().hex}.zip"
+        zip_path = output_dir / zip_name
+
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            written_files = []
+            for label, page_indices in groups:
+                writer = PdfWriter()
+                for idx in page_indices:
+                    writer.add_page(reader.pages[idx])
+                out_name = f"{label}.pdf"
+                out_path = Path(tmpdir) / out_name
+                with open(out_path, "wb") as f:
+                    writer.write(f)
+                written_files.append((out_name, out_path))
+
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                for name, path in written_files:
+                    zf.write(path, arcname=name)
+
+        job.status = "completed"
+        job.output_file = f"outputs/{zip_name}"
+        job.completed_at = datetime.now()
+        job.save(update_fields=["status", "output_file", "completed_at"])
+
+        # Clean up input
+        try:
+            os.remove(input_path)
+        except OSError:
+            pass
+
+        return {"status": "completed", "output": job.output_file}
+
+    except Exception as e:
+        job.status = "failed"
+        job.error_message = str(e)
+        job.save(update_fields=["status", "error_message"])
+        return {"error": str(e)}
