@@ -61,7 +61,7 @@ export const tools: Tool[] = [
         name: "Page Numbers",
         description: "Add page numbers into PDFs with ease.",
         icon: "🔢",
-        available: false,
+        available: true,
     },
     {
         slug: "protect-pdf",

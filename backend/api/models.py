@@ -40,6 +40,7 @@ class Job(models.Model):
         ("protect", "Protect PDF"),
         ("unlock", "Unlock PDF"),
         ("watermark", "Watermark PDF"),
+        ("page-numbers", "Page Numbers"),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

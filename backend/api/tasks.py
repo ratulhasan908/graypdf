@@ -879,3 +879,133 @@ def watermark_pdf_task(self, job_id):
         job.error_message = str(e)
         job.save(update_fields=["status", "error_message"])
         return {"error": str(e)}
+
+
+
+
+@shared_task(bind=True)
+def page_numbers_task(self, job_id):
+    """
+    Add page numbers to every page.
+    Options:
+      - position: "bottom-center" | "bottom-right" | "bottom-left"
+                  | "top-center" | "top-right" | "top-left"
+                  (default: "bottom-center")
+      - format: "number" | "page-n" | "n-of-total" (default: "number")
+      - start: int (default: 1)
+      - font_size: int (default: 12)
+      - margin: int in points (default: 40)
+    """
+    import io
+    from reportlab.pdfgen import canvas as rl_canvas
+    from reportlab.lib.colors import HexColor
+    from pypdf import PdfReader, PdfWriter
+
+    try:
+        job = Job.objects.get(id=job_id)
+    except Job.DoesNotExist:
+        return {"error": "Job not found"}
+
+    try:
+        job.status = "processing"
+        job.save(update_fields=["status"])
+
+        upload_dir = Path(settings.MEDIA_ROOT) / "uploads"
+        output_dir = Path(settings.MEDIA_ROOT) / "outputs"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        if not job.input_files:
+            raise ValueError("No input file found.")
+
+        input_path = upload_dir / job.input_files[0]
+        if not input_path.exists():
+            raise FileNotFoundError(f"Input file missing: {input_path.name}")
+
+        options = job.options or {}
+        position = options.get("position", "bottom-center")
+        fmt = options.get("format", "number")
+        start = int(options.get("start", 1))
+        font_size = int(options.get("font_size", 12))
+        margin = int(options.get("margin", 40))
+
+        if position not in (
+            "bottom-center", "bottom-right", "bottom-left",
+            "top-center", "top-right", "top-left",
+        ):
+            position = "bottom-center"
+        if fmt not in ("number", "page-n", "n-of-total"):
+            fmt = "number"
+
+        font_size = max(8, min(font_size, 30))
+        margin = max(20, min(margin, 100))
+
+        reader = PdfReader(str(input_path))
+        total_pages = len(reader.pages)
+        writer = PdfWriter()
+
+        for idx, page in enumerate(reader.pages):
+            page_width = float(page.mediabox.width)
+            page_height = float(page.mediabox.height)
+
+            current_num = start + idx
+
+            # Build the text
+            if fmt == "number":
+                label = str(current_num)
+            elif fmt == "page-n":
+                label = f"Page {current_num}"
+            else:  # n-of-total
+                label = f"{current_num} / {total_pages + start - 1}"
+
+            # Overlay PDF
+            packet = io.BytesIO()
+            can = rl_canvas.Canvas(packet, pagesize=(page_width, page_height))
+            can.setFont("Helvetica", font_size)
+            can.setFillColor(HexColor("#000000"))
+
+            text_width = can.stringWidth(label, "Helvetica", font_size)
+
+            # X position
+            if "left" in position:
+                x = margin
+            elif "right" in position:
+                x = page_width - margin - text_width
+            else:  # center
+                x = (page_width - text_width) / 2
+
+            # Y position
+            if position.startswith("top"):
+                y = page_height - margin
+            else:  # bottom
+                y = margin
+
+            can.drawString(x, y, label)
+            can.save()
+            packet.seek(0)
+
+            overlay = PdfReader(packet)
+            page.merge_page(overlay.pages[0])
+            writer.add_page(page)
+
+        output_name = f"{uuid.uuid4().hex}.pdf"
+        output_path = output_dir / output_name
+        with open(output_path, "wb") as f:
+            writer.write(f)
+
+        job.status = "completed"
+        job.output_file = f"outputs/{output_name}"
+        job.completed_at = datetime.now()
+        job.save(update_fields=["status", "output_file", "completed_at"])
+
+        try:
+            os.remove(input_path)
+        except OSError:
+            pass
+
+        return {"status": "completed", "pages": total_pages}
+
+    except Exception as e:
+        job.status = "failed"
+        job.error_message = str(e)
+        job.save(update_fields=["status", "error_message"])
+        return {"error": str(e)}

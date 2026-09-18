@@ -14,6 +14,7 @@ from .tasks import (
     protect_pdf_task,
     unlock_pdf_task,
     watermark_pdf_task,
+    page_numbers_task,
 )
 from .rate_limit import check_and_increment_guest, check_and_increment_user, get_usage
 
@@ -904,6 +905,96 @@ def watermark_pdf(request):
     )
 
     watermark_pdf_task.delay(str(job.id))
+
+    serializer = JobSerializer(job, context={"request": request})
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def page_numbers(request):
+    """
+    Accept 1 PDF + page number options, enqueue task.
+    """
+    import uuid
+    from pathlib import Path
+    from django.conf import settings
+    from .tasks import page_numbers_task
+
+    files = request.FILES.getlist("files")
+    if len(files) != 1:
+        return Response(
+            {"detail": "Please upload exactly 1 PDF file."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    f = files[0]
+    if not f.name.lower().endswith(".pdf"):
+        return Response(
+            {"detail": f"{f.name} is not a PDF file."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Rate limit
+    if request.user.is_authenticated:
+        allowed, used, limit = check_and_increment_user(request.user)
+    else:
+        allowed, used, limit = check_and_increment_guest(request)
+
+    if not allowed:
+        return Response(
+            {
+                "detail": f"Daily limit reached ({limit} files/day). "
+                          f"{'Sign up for more.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
+                "used": used,
+                "limit": limit,
+            },
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
+    def to_int(v, default):
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return default
+
+    position = request.data.get("position", "bottom-center")
+    fmt = request.data.get("format", "number")
+    start = to_int(request.data.get("start", 1), 1)
+    font_size = to_int(request.data.get("font_size", 12), 12)
+    margin = to_int(request.data.get("margin", 40), 40)
+
+    if position not in (
+        "bottom-center", "bottom-right", "bottom-left",
+        "top-center", "top-right", "top-left",
+    ):
+        position = "bottom-center"
+    if fmt not in ("number", "page-n", "n-of-total"):
+        fmt = "number"
+
+    upload_dir = Path(settings.MEDIA_ROOT) / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{uuid.uuid4().hex}.pdf"
+    filepath = upload_dir / filename
+    with open(filepath, "wb+") as dest:
+        for chunk in f.chunks():
+            dest.write(chunk)
+
+    job = Job.objects.create(
+        user=request.user if request.user.is_authenticated else None,
+        tool="page-numbers",
+        status="pending",
+        input_files=[filename],
+        options={
+            "position": position,
+            "format": fmt,
+            "start": start,
+            "font_size": font_size,
+            "margin": margin,
+        },
+    )
+
+    page_numbers_task.delay(str(job.id))
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
