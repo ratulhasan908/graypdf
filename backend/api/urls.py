@@ -20,6 +20,7 @@ urlpatterns = [
     path("tools/unlock/", views.unlock_pdf, name="unlock-pdf"),
     path("tools/watermark/", views.watermark_pdf, name="watermark-pdf"),
     path("tools/page-numbers/", views.page_numbers, name="page-numbers"),
+    path("tools/organize/", views.organize_pdf, name="organize-pdf"),
 
     path("jobs/<uuid:job_id>/status/", views.job_status, name="job-status"),
     path("jobs/<uuid:job_id>/download/", views.job_download, name="job-download"),

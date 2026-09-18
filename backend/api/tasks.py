@@ -1009,3 +1009,90 @@ def page_numbers_task(self, job_id):
         job.error_message = str(e)
         job.save(update_fields=["status", "error_message"])
         return {"error": str(e)}
+
+
+
+
+@shared_task(bind=True)
+def organize_pdf_task(self, job_id):
+    """
+    Reorder pages based on a new order.
+    Options:
+      - order: list of ints (1-based page numbers) e.g. [3, 1, 2]
+        Pages not in the list are dropped (that's how deletion works).
+      - duplicates allowed (a page can appear multiple times)
+    """
+    from pypdf import PdfReader, PdfWriter
+
+    try:
+        job = Job.objects.get(id=job_id)
+    except Job.DoesNotExist:
+        return {"error": "Job not found"}
+
+    try:
+        job.status = "processing"
+        job.save(update_fields=["status"])
+
+        upload_dir = Path(settings.MEDIA_ROOT) / "uploads"
+        output_dir = Path(settings.MEDIA_ROOT) / "outputs"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        if not job.input_files:
+            raise ValueError("No input file found.")
+
+        input_path = upload_dir / job.input_files[0]
+        if not input_path.exists():
+            raise FileNotFoundError(f"Input file missing: {input_path.name}")
+
+        options = job.options or {}
+        order = options.get("order") or []
+
+        if not isinstance(order, list) or not order:
+            raise ValueError("Page order is required.")
+
+        reader = PdfReader(str(input_path))
+        total_pages = len(reader.pages)
+
+        # Validate all page numbers
+        normalized = []
+        for raw in order:
+            try:
+                n = int(raw)
+            except (TypeError, ValueError):
+                raise ValueError(f"Invalid page number: {raw}")
+            if n < 1 or n > total_pages:
+                raise ValueError(
+                    f"Page {n} does not exist (PDF has {total_pages} pages)."
+                )
+            normalized.append(n - 1)  # convert to 0-based
+
+        writer = PdfWriter()
+        for idx in normalized:
+            writer.add_page(reader.pages[idx])
+
+        output_name = f"{uuid.uuid4().hex}.pdf"
+        output_path = output_dir / output_name
+        with open(output_path, "wb") as f:
+            writer.write(f)
+
+        job.status = "completed"
+        job.output_file = f"outputs/{output_name}"
+        job.completed_at = datetime.now()
+        job.save(update_fields=["status", "output_file", "completed_at"])
+
+        try:
+            os.remove(input_path)
+        except OSError:
+            pass
+
+        return {
+            "status": "completed",
+            "output_pages": len(normalized),
+            "original_pages": total_pages,
+        }
+
+    except Exception as e:
+        job.status = "failed"
+        job.error_message = str(e)
+        job.save(update_fields=["status", "error_message"])
+        return {"error": str(e)}

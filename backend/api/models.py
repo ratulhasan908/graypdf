@@ -41,6 +41,7 @@ class Job(models.Model):
         ("unlock", "Unlock PDF"),
         ("watermark", "Watermark PDF"),
         ("page-numbers", "Page Numbers"),
+        ("organize", "Organize PDF"),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

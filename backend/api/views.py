@@ -15,6 +15,7 @@ from .tasks import (
     unlock_pdf_task,
     watermark_pdf_task,
     page_numbers_task,
+    organize_pdf_task,
 )
 from .rate_limit import check_and_increment_guest, check_and_increment_user, get_usage
 
@@ -995,6 +996,96 @@ def page_numbers(request):
     )
 
     page_numbers_task.delay(str(job.id))
+
+    serializer = JobSerializer(job, context={"request": request})
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def organize_pdf(request):
+    """
+    Accept 1 PDF + page order, enqueue organize task.
+    """
+    import json
+    import uuid
+    from pathlib import Path
+    from django.conf import settings
+    from .tasks import organize_pdf_task
+
+    files = request.FILES.getlist("files")
+    if len(files) != 1:
+        return Response(
+            {"detail": "Please upload exactly 1 PDF file."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    f = files[0]
+    if not f.name.lower().endswith(".pdf"):
+        return Response(
+            {"detail": f"{f.name} is not a PDF file."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    raw_order = request.data.get("order", "")
+    order = None
+
+    # Accept either a JSON list or a comma-separated string
+    if isinstance(raw_order, list):
+        order = raw_order
+    else:
+        raw_order = str(raw_order).strip()
+        if raw_order.startswith("["):
+            try:
+                order = json.loads(raw_order)
+            except json.JSONDecodeError:
+                order = None
+        else:
+            # Comma-separated like "3,1,2"
+            order = [
+                p.strip() for p in raw_order.split(",") if p.strip()
+            ]
+
+    if not order:
+        return Response(
+            {"detail": "Page order is required (e.g., 3,1,2)."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Rate limit
+    if request.user.is_authenticated:
+        allowed, used, limit = check_and_increment_user(request.user)
+    else:
+        allowed, used, limit = check_and_increment_guest(request)
+
+    if not allowed:
+        return Response(
+            {
+                "detail": f"Daily limit reached ({limit} files/day). "
+                          f"{'Sign up for more.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
+                "used": used,
+                "limit": limit,
+            },
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
+    upload_dir = Path(settings.MEDIA_ROOT) / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{uuid.uuid4().hex}.pdf"
+    filepath = upload_dir / filename
+    with open(filepath, "wb+") as dest:
+        for chunk in f.chunks():
+            dest.write(chunk)
+
+    job = Job.objects.create(
+        user=request.user if request.user.is_authenticated else None,
+        tool="organize",
+        status="pending",
+        input_files=[filename],
+        options={"order": order},
+    )
+
+    organize_pdf_task.delay(str(job.id))
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
