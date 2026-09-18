@@ -7,4 +7,8 @@ urlpatterns = [
     path("auth/login/", views.login, name="login"),
     path("auth/logout/", views.logout, name="logout"),
     path("auth/me/", views.me, name="me"),
+
+    path("tools/merge/", views.merge_pdf, name="merge-pdf"),
+    path("jobs/<uuid:job_id>/status/", views.job_status, name="job-status"),
+    path("jobs/<uuid:job_id>/download/", views.job_download, name="job-download"),
 ]

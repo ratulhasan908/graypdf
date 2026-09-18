@@ -151,3 +151,14 @@ REST_FRAMEWORK = {
 }
 
 AUTH_USER_MODEL = "api.User"
+
+# Media files (user uploads + generated outputs)
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
+
+# Upload limits
+DATA_UPLOAD_MAX_MEMORY_SIZE = 50 * 1024 * 1024   # 50 MB
+FILE_UPLOAD_MAX_MEMORY_SIZE = 50 * 1024 * 1024   # 50 MB
+
+# File retention
+FILE_RETENTION_HOURS = 2

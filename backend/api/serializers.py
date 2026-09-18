@@ -1,6 +1,8 @@
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
+from .models import Job
+
 User = get_user_model()
 
 
@@ -24,3 +26,27 @@ class RegisterSerializer(serializers.ModelSerializer):
         user.set_password(password)
         user.save()
         return user
+
+
+class JobSerializer(serializers.ModelSerializer):
+    download_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Job
+        fields = (
+            "id",
+            "tool",
+            "status",
+            "output_file",
+            "download_url",
+            "error_message",
+            "created_at",
+            "completed_at",
+        )
+
+    def get_download_url(self, obj):
+        if obj.status == "completed" and obj.output_file:
+            request = self.context.get("request")
+            if request:
+                return request.build_absolute_uri(f"/api/jobs/{obj.id}/download/")
+        return None
