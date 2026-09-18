@@ -17,6 +17,7 @@ urlpatterns = [
     path("tools/pdf-to-jpg/", views.pdf_to_jpg, name="pdf-to-jpg"),
     path("tools/jpg-to-pdf/", views.jpg_to_pdf, name="jpg-to-pdf"),
     path("tools/protect/", views.protect_pdf, name="protect-pdf"),
+    path("tools/unlock/", views.unlock_pdf, name="unlock-pdf"),
 
     path("jobs/<uuid:job_id>/status/", views.job_status, name="job-status"),
     path("jobs/<uuid:job_id>/download/", views.job_download, name="job-download"),

@@ -75,7 +75,7 @@ export const tools: Tool[] = [
         name: "Unlock PDF",
         description: "Remove PDF password security.",
         icon: "🔓",
-        available: false,
+        available: true,
     },
     {
         slug: "organize-pdf",

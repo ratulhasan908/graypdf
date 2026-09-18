@@ -38,6 +38,7 @@ class Job(models.Model):
         ("pdf-to-jpg", "PDF to JPG"),
         ("jpg-to-pdf", "JPG to PDF"),
         ("protect", "Protect PDF"),
+        ("unlock", "Unlock PDF"),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
