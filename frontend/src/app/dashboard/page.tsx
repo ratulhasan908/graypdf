@@ -2,23 +2,17 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
 
 export default function DashboardPage() {
     const router = useRouter();
-    const { user, loading, logout } = useAuth();
+    const { user, loading } = useAuth();
 
     useEffect(() => {
         if (!loading && !user) {
             router.push("/login");
         }
     }, [user, loading, router]);
-
-    async function handleLogout() {
-        await logout();
-        router.push("/");
-    }
 
     if (loading) {
         return (
@@ -33,18 +27,6 @@ export default function DashboardPage() {
     return (
         <main className="min-h-screen bg-gray-50 px-4 py-8">
             <div className="max-w-4xl mx-auto">
-                <div className="flex justify-between items-center mb-8">
-                    <Link href="/" className="text-2xl font-bold text-blue-600">
-                        GrayPDF
-                    </Link>
-                    <button
-                        onClick={handleLogout}
-                        className="text-sm text-gray-600 hover:text-red-600"
-                    >
-                        Log out
-                    </button>
-                </div>
-
                 <div className="bg-white rounded-lg shadow p-6 mb-6">
                     <h1 className="text-2xl font-bold mb-1">
                         Welcome, {user.username}!

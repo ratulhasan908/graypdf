@@ -1,44 +1,63 @@
-"use client";
-
-import { useEffect, useState } from "react";
-import { apiFetch } from "@/lib/api";
-
-type Health = {
-  status: string;
-  service: string;
-  version: string;
-};
+import Link from "next/link";
+import { tools } from "@/lib/tools";
 
 export default function Home() {
-  const [health, setHealth] = useState<Health | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    apiFetch<Health>("/health/")
-      .then(setHealth)
-      .catch((e) => setError(e.message));
-  }, []);
-
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center p-24">
-      <h1 className="text-5xl font-bold mb-8 text-blue-600">GrayPDF</h1>
-      <p className="text-gray-500 mb-8">PDF tools coming soon</p>
+    <main className="min-h-screen bg-gray-50">
+      {/* Hero */}
+      <section className="max-w-6xl mx-auto px-4 pt-16 pb-12 text-center">
+        <h1 className="text-5xl font-bold text-gray-900 mb-4">
+          Every PDF tool you need,
+          <br />
+          <span className="text-blue-600">all in one place</span>
+        </h1>
+        <p className="text-lg text-gray-600 max-w-2xl mx-auto">
+          Merge, split, compress, and convert your PDF files. Free, fast, and
+          secure — no signup required.
+        </p>
+      </section>
 
-      {error && (
-        <div className="text-red-500 bg-red-50 p-4 rounded">
-          Error: {error}
-        </div>
-      )}
+      {/* Tool grid */}
+      <section className="max-w-6xl mx-auto px-4 pb-20">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          {tools.map((tool) => {
+            const CardWrapper = tool.available ? Link : "div";
+            const wrapperProps = tool.available
+              ? { href: `/tools/${tool.slug}` }
+              : {};
 
-      {health ? (
-        <div className="text-green-600 bg-green-50 p-4 rounded">
-          <p className="font-bold">Backend connected ✅</p>
-          <p>Service: {health.service}</p>
-          <p>Version: {health.version}</p>
+            return (
+              <CardWrapper
+                key={tool.slug}
+                {...(wrapperProps as any)}
+                className={`bg-white rounded-lg shadow-sm border border-gray-200 p-5 transition ${tool.available
+                    ? "hover:shadow-md hover:border-blue-400 cursor-pointer"
+                    : "opacity-60 cursor-not-allowed"
+                  }`}
+              >
+                <div className="text-3xl mb-3">{tool.icon}</div>
+                <h3 className="font-bold text-gray-900 mb-1">{tool.name}</h3>
+                <p className="text-sm text-gray-500">{tool.description}</p>
+                {!tool.available && (
+                  <span className="inline-block mt-3 text-xs bg-gray-100 text-gray-500 px-2 py-1 rounded">
+                    Coming soon
+                  </span>
+                )}
+              </CardWrapper>
+            );
+          })}
         </div>
-      ) : (
-        !error && <p className="text-gray-400">Connecting to backend...</p>
-      )}
+      </section>
+
+      {/* Footer */}
+      <footer className="border-t border-gray-200 bg-white">
+        <div className="max-w-6xl mx-auto px-4 py-8 text-center text-sm text-gray-500">
+          <p>© {new Date().getFullYear()} GrayPDF. All rights reserved.</p>
+          <p className="mt-2">
+            Files are automatically deleted after 2 hours. Your privacy matters.
+          </p>
+        </div>
+      </footer>
     </main>
   );
 }
