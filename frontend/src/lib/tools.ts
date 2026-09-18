@@ -68,7 +68,7 @@ export const tools: Tool[] = [
         name: "Protect PDF",
         description: "Protect PDF files with a password.",
         icon: "🔒",
-        available: false,
+        available: true,
     },
     {
         slug: "unlock-pdf",

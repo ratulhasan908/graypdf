@@ -595,3 +595,85 @@ def jpg_to_pdf_task(self, job_id):
         job.error_message = str(e)
         job.save(update_fields=["status", "error_message"])
         return {"error": str(e)}
+
+
+
+
+@shared_task(bind=True)
+def protect_pdf_task(self, job_id):
+    """
+    Add password protection + optional permissions.
+    Options:
+      - password: string
+      - allow_printing: bool (default True)
+      - allow_copying: bool (default True)
+    """
+    from pypdf import PdfReader, PdfWriter
+
+    try:
+        job = Job.objects.get(id=job_id)
+    except Job.DoesNotExist:
+        return {"error": "Job not found"}
+
+    try:
+        job.status = "processing"
+        job.save(update_fields=["status"])
+
+        upload_dir = Path(settings.MEDIA_ROOT) / "uploads"
+        output_dir = Path(settings.MEDIA_ROOT) / "outputs"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        if not job.input_files:
+            raise ValueError("No input file found.")
+
+        input_path = upload_dir / job.input_files[0]
+        if not input_path.exists():
+            raise FileNotFoundError(f"Input file missing: {input_path.name}")
+
+        options = job.options or {}
+        password = options.get("password", "").strip()
+        allow_printing = options.get("allow_printing", True)
+        allow_copying = options.get("allow_copying", True)
+
+        if not password:
+            raise ValueError("Password is required.")
+        if len(password) < 4:
+            raise ValueError("Password must be at least 4 characters.")
+
+        reader = PdfReader(str(input_path))
+        writer = PdfWriter()
+
+        for page in reader.pages:
+            writer.add_page(page)
+
+        writer.encrypt(
+            user_password=password,
+            owner_password=password,
+            permissions_flag=(
+                (0b0100 if allow_printing else 0)
+                | (0b0001 if allow_copying else 0)
+            ),
+        )
+
+        output_name = f"{uuid.uuid4().hex}.pdf"
+        output_path = output_dir / output_name
+        with open(output_path, "wb") as f:
+            writer.write(f)
+
+        job.status = "completed"
+        job.output_file = f"outputs/{output_name}"
+        job.completed_at = datetime.now()
+        job.save(update_fields=["status", "output_file", "completed_at"])
+
+        try:
+            os.remove(input_path)
+        except OSError:
+            pass
+
+        return {"status": "completed"}
+
+    except Exception as e:
+        job.status = "failed"
+        job.error_message = str(e)
+        job.save(update_fields=["status", "error_message"])
+        return {"error": str(e)}
