@@ -14,6 +14,7 @@ urlpatterns = [
     path("tools/split/", views.split_pdf, name="split-pdf"),
     path("tools/compress/", views.compress_pdf, name="compress-pdf"),
     path("tools/rotate/", views.rotate_pdf, name="rotate-pdf"),
+    path("tools/pdf-to-jpg/", views.pdf_to_jpg, name="pdf-to-jpg"),
 
     path("jobs/<uuid:job_id>/status/", views.job_status, name="job-status"),
     path("jobs/<uuid:job_id>/download/", views.job_download, name="job-download"),

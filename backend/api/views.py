@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from .tasks import merge_pdf_task, split_pdf_task, compress_pdf_task, rotate_pdf_task
+from .tasks import merge_pdf_task, split_pdf_task, compress_pdf_task, rotate_pdf_task, pdf_to_jpg_task
 from .rate_limit import check_and_increment_guest, check_and_increment_user, get_usage
 
 from django.conf import settings
@@ -272,7 +272,7 @@ def job_download(request, job_id):
         )
 
     # Choose extension + MIME based on tool
-    if job.tool == "split":
+    if job.tool in ("split", "pdf-to-jpg"):
         extension = "zip"
         mime = "application/zip"
     else:
@@ -501,6 +501,78 @@ def rotate_pdf(request):
     )
 
     rotate_pdf_task.delay(str(job.id))
+
+    serializer = JobSerializer(job, context={"request": request})
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def pdf_to_jpg(request):
+    """
+    Accept 1 PDF + dpi, enqueue pdf_to_jpg task.
+    """
+    import uuid
+    from pathlib import Path
+    from django.conf import settings
+    from .tasks import pdf_to_jpg_task
+
+    files = request.FILES.getlist("files")
+    if len(files) != 1:
+        return Response(
+            {"detail": "Please upload exactly 1 PDF file."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    f = files[0]
+    if not f.name.lower().endswith(".pdf"):
+        return Response(
+            {"detail": f"{f.name} is not a PDF file."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Rate limit
+    if request.user.is_authenticated:
+        allowed, used, limit = check_and_increment_user(request.user)
+    else:
+        allowed, used, limit = check_and_increment_guest(request)
+
+    if not allowed:
+        return Response(
+            {
+                "detail": f"Daily limit reached ({limit} files/day). "
+                          f"{'Sign up for more.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
+                "used": used,
+                "limit": limit,
+            },
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
+    dpi = request.data.get("dpi", "150")
+    try:
+        dpi = int(dpi)
+    except (TypeError, ValueError):
+        dpi = 150
+    if dpi not in (72, 150, 300):
+        dpi = 150
+
+    upload_dir = Path(settings.MEDIA_ROOT) / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{uuid.uuid4().hex}.pdf"
+    filepath = upload_dir / filename
+    with open(filepath, "wb+") as dest:
+        for chunk in f.chunks():
+            dest.write(chunk)
+
+    job = Job.objects.create(
+        user=request.user if request.user.is_authenticated else None,
+        tool="pdf-to-jpg",
+        status="pending",
+        input_files=[filename],
+        options={"dpi": dpi},
+    )
+
+    pdf_to_jpg_task.delay(str(job.id))
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)

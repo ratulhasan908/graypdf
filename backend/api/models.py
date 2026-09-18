@@ -35,6 +35,7 @@ class Job(models.Model):
         ("split", "Split PDF"),
         ("compress", "Compress PDF"),
         ("rotate", "Rotate PDF"),
+        ("pdf-to-jpg", "PDF to JPG"),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

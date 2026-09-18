@@ -33,7 +33,7 @@ export const tools: Tool[] = [
         name: "PDF to JPG",
         description: "Convert each PDF page into a JPG image.",
         icon: "🖼️",
-        available: false,
+        available: true,
     },
     {
         slug: "jpg-to-pdf",

@@ -412,3 +412,91 @@ def rotate_pdf_task(self, job_id):
         job.error_message = str(e)
         job.save(update_fields=["status", "error_message"])
         return {"error": str(e)}
+
+
+
+@shared_task(bind=True)
+def pdf_to_jpg_task(self, job_id):
+    """
+    Convert each page of a PDF to a JPG image.
+    Options:
+      - dpi: 72 | 150 | 300 (default: 150)
+    Output: ZIP containing one JPG per page.
+    """
+    import zipfile
+    import tempfile
+    import fitz  # PyMuPDF
+
+    try:
+        job = Job.objects.get(id=job_id)
+    except Job.DoesNotExist:
+        return {"error": "Job not found"}
+
+    try:
+        job.status = "processing"
+        job.save(update_fields=["status"])
+
+        upload_dir = Path(settings.MEDIA_ROOT) / "uploads"
+        output_dir = Path(settings.MEDIA_ROOT) / "outputs"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        if not job.input_files:
+            raise ValueError("No input file found.")
+
+        input_path = upload_dir / job.input_files[0]
+        if not input_path.exists():
+            raise FileNotFoundError(f"Input file missing: {input_path.name}")
+
+        options = job.options or {}
+        dpi = int(options.get("dpi", 150))
+        if dpi not in (72, 150, 300):
+            dpi = 150
+
+        # Render each page to JPG
+        doc = fitz.open(str(input_path))
+        total_pages = len(doc)
+        if total_pages == 0:
+            raise ValueError("PDF has no pages.")
+
+        zip_name = f"{uuid.uuid4().hex}.zip"
+        zip_path = output_dir / zip_name
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            written = []
+            for i, page in enumerate(doc):
+                # scale = dpi / 72 (PDF default is 72 dpi)
+                zoom = dpi / 72.0
+                matrix = fitz.Matrix(zoom, zoom)
+                pix = page.get_pixmap(matrix=matrix, alpha=False)
+                jpg_name = f"page-{i + 1}.jpg"
+                jpg_path = Path(tmpdir) / jpg_name
+                pix.save(str(jpg_path))
+                written.append((jpg_name, jpg_path))
+
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                for name, path in written:
+                    zf.write(path, arcname=name)
+
+        doc.close()
+
+        job.status = "completed"
+        job.output_file = f"outputs/{zip_name}"
+        job.completed_at = datetime.now()
+        job.save(update_fields=["status", "output_file", "completed_at"])
+
+        try:
+            os.remove(input_path)
+        except OSError:
+            pass
+
+        return {
+            "status": "completed",
+            "pages": total_pages,
+            "dpi": dpi,
+        }
+
+    except Exception as e:
+        job.status = "failed"
+        job.error_message = str(e)
+        job.save(update_fields=["status", "error_message"])
+        return {"error": str(e)}
