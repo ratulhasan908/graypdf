@@ -321,3 +321,94 @@ def compress_pdf_task(self, job_id):
         job.error_message = str(e)
         job.save(update_fields=["status", "error_message"])
         return {"error": str(e)}
+
+
+
+@shared_task(bind=True)
+def rotate_pdf_task(self, job_id):
+    """
+    Rotate PDF pages.
+    Options:
+      - angle: 90 | 180 | 270 (clockwise degrees)
+      - pages: "all" | "1,3,5" | "1-3,7"
+    """
+    from pypdf import PdfReader, PdfWriter
+
+    try:
+        job = Job.objects.get(id=job_id)
+    except Job.DoesNotExist:
+        return {"error": "Job not found"}
+
+    try:
+        job.status = "processing"
+        job.save(update_fields=["status"])
+
+        upload_dir = Path(settings.MEDIA_ROOT) / "uploads"
+        output_dir = Path(settings.MEDIA_ROOT) / "outputs"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        if not job.input_files:
+            raise ValueError("No input file found.")
+
+        input_path = upload_dir / job.input_files[0]
+        if not input_path.exists():
+            raise FileNotFoundError(f"Input file missing: {input_path.name}")
+
+        options = job.options or {}
+        angle = int(options.get("angle", 90))
+        if angle not in (90, 180, 270):
+            raise ValueError("Angle must be 90, 180, or 270.")
+
+        pages_spec = options.get("pages", "all")
+
+        reader = PdfReader(str(input_path))
+        total_pages = len(reader.pages)
+
+        # Determine which page indices to rotate (0-based)
+        if pages_spec == "all" or not pages_spec:
+            indices_to_rotate = set(range(total_pages))
+        else:
+            indices_to_rotate = set()
+            for part in pages_spec.split(","):
+                part = part.strip()
+                if "-" in part:
+                    start, end = part.split("-")
+                    start, end = int(start) - 1, int(end) - 1
+                    if start < 0 or end >= total_pages or start > end:
+                        raise ValueError(f"Invalid range: {part}")
+                    indices_to_rotate.update(range(start, end + 1))
+                else:
+                    idx = int(part) - 1
+                    if idx < 0 or idx >= total_pages:
+                        raise ValueError(f"Invalid page: {part}")
+                    indices_to_rotate.add(idx)
+
+        writer = PdfWriter()
+        for i, page in enumerate(reader.pages):
+            if i in indices_to_rotate:
+                current = page.get("/Rotate", 0)
+                page.rotate(angle)
+            writer.add_page(page)
+
+        output_name = f"{uuid.uuid4().hex}.pdf"
+        output_path = output_dir / output_name
+        with open(output_path, "wb") as out:
+            writer.write(out)
+
+        job.status = "completed"
+        job.output_file = f"outputs/{output_name}"
+        job.completed_at = datetime.now()
+        job.save(update_fields=["status", "output_file", "completed_at"])
+
+        try:
+            os.remove(input_path)
+        except OSError:
+            pass
+
+        return {"status": "completed", "angle": angle}
+
+    except Exception as e:
+        job.status = "failed"
+        job.error_message = str(e)
+        job.save(update_fields=["status", "error_message"])
+        return {"error": str(e)}

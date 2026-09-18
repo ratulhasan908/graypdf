@@ -47,7 +47,7 @@ export const tools: Tool[] = [
         name: "Rotate PDF",
         description: "Rotate your PDFs the way you need them.",
         icon: "🔄",
-        available: false,
+        available: true,
     },
     {
         slug: "watermark",

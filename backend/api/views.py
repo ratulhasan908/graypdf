@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from .tasks import merge_pdf_task, split_pdf_task, compress_pdf_task
+from .tasks import merge_pdf_task, split_pdf_task, compress_pdf_task, rotate_pdf_task
 from .rate_limit import check_and_increment_guest, check_and_increment_user, get_usage
 
 from django.conf import settings
@@ -427,6 +427,80 @@ def compress_pdf(request):
     )
 
     compress_pdf_task.delay(str(job.id))
+
+    serializer = JobSerializer(job, context={"request": request})
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def rotate_pdf(request):
+    """
+    Accept 1 PDF + angle + pages, enqueue rotate task.
+    """
+    import uuid
+    from pathlib import Path
+    from django.conf import settings
+    from .tasks import rotate_pdf_task
+
+    files = request.FILES.getlist("files")
+    if len(files) != 1:
+        return Response(
+            {"detail": "Please upload exactly 1 PDF file."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    f = files[0]
+    if not f.name.lower().endswith(".pdf"):
+        return Response(
+            {"detail": f"{f.name} is not a PDF file."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Rate limit
+    if request.user.is_authenticated:
+        allowed, used, limit = check_and_increment_user(request.user)
+    else:
+        allowed, used, limit = check_and_increment_guest(request)
+
+    if not allowed:
+        return Response(
+            {
+                "detail": f"Daily limit reached ({limit} files/day). "
+                          f"{'Sign up for more.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
+                "used": used,
+                "limit": limit,
+            },
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
+    angle = request.data.get("angle", "90")
+    try:
+        angle = int(angle)
+    except (TypeError, ValueError):
+        angle = 90
+    if angle not in (90, 180, 270):
+        angle = 90
+
+    pages_spec = request.data.get("pages", "all")
+
+    upload_dir = Path(settings.MEDIA_ROOT) / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{uuid.uuid4().hex}.pdf"
+    filepath = upload_dir / filename
+    with open(filepath, "wb+") as dest:
+        for chunk in f.chunks():
+            dest.write(chunk)
+
+    job = Job.objects.create(
+        user=request.user if request.user.is_authenticated else None,
+        tool="rotate",
+        status="pending",
+        input_files=[filename],
+        options={"angle": angle, "pages": pages_spec},
+    )
+
+    rotate_pdf_task.delay(str(job.id))
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
