@@ -82,7 +82,7 @@ export const tools: Tool[] = [
         name: "Organize PDF",
         description: "Sort, delete, or add PDF pages.",
         icon: "📑",
-        available: false,
+        available: true,
     },
     {
         slug: "crop-pdf",

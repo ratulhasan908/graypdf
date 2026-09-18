@@ -1089,3 +1089,36 @@ def organize_pdf(request):
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def pdf_page_count(request):
+    """
+    Returns the number of pages in an uploaded PDF.
+    Used by Organize UI to build the page grid.
+    """
+    from pypdf import PdfReader
+
+    files = request.FILES.getlist("files")
+    if len(files) != 1:
+        return Response(
+            {"detail": "Please upload exactly 1 PDF file."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    f = files[0]
+    if not f.name.lower().endswith(".pdf"):
+        return Response(
+            {"detail": f"{f.name} is not a PDF file."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        reader = PdfReader(f)
+        return Response({"pages": len(reader.pages)})
+    except Exception as e:
+        return Response(
+            {"detail": f"Could not read PDF: {str(e)}"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
