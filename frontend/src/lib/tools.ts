@@ -26,7 +26,7 @@ export const tools: Tool[] = [
         name: "Compress PDF",
         description: "Reduce file size while keeping quality.",
         icon: "📉",
-        available: false,
+        available: true,
     },
     {
         slug: "pdf-to-jpg",
