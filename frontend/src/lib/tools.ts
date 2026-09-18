@@ -54,7 +54,7 @@ export const tools: Tool[] = [
         name: "Watermark",
         description: "Stamp an image or text over your PDF.",
         icon: "💧",
-        available: false,
+        available: true,
     },
     {
         slug: "page-numbers",

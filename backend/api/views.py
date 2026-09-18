@@ -3,7 +3,18 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from .tasks import merge_pdf_task, split_pdf_task, compress_pdf_task, rotate_pdf_task, pdf_to_jpg_task, jpg_to_pdf_task, protect_pdf_task, unlock_pdf_task
+# from .tasks import merge_pdf_task, split_pdf_task, compress_pdf_task, rotate_pdf_task, pdf_to_jpg_task, jpg_to_pdf_task, protect_pdf_task, unlock_pdf_task
+from .tasks import (
+    merge_pdf_task,
+    split_pdf_task,
+    compress_pdf_task,
+    rotate_pdf_task,
+    pdf_to_jpg_task,
+    jpg_to_pdf_task,
+    protect_pdf_task,
+    unlock_pdf_task,
+    watermark_pdf_task,
+)
 from .rate_limit import check_and_increment_guest, check_and_increment_user, get_usage
 
 from django.conf import settings
@@ -797,6 +808,102 @@ def unlock_pdf(request):
     )
 
     unlock_pdf_task.delay(str(job.id))
+
+    serializer = JobSerializer(job, context={"request": request})
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def watermark_pdf(request):
+    """
+    Accept 1 PDF + watermark options, enqueue watermark task.
+    """
+    import uuid
+    from pathlib import Path
+    from django.conf import settings
+    from .tasks import watermark_pdf_task
+
+    files = request.FILES.getlist("files")
+    if len(files) != 1:
+        return Response(
+            {"detail": "Please upload exactly 1 PDF file."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    f = files[0]
+    if not f.name.lower().endswith(".pdf"):
+        return Response(
+            {"detail": f"{f.name} is not a PDF file."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    text = str(request.data.get("text", "")).strip()
+    if not text:
+        return Response(
+            {"detail": "Watermark text is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Rate limit
+    if request.user.is_authenticated:
+        allowed, used, limit = check_and_increment_user(request.user)
+    else:
+        allowed, used, limit = check_and_increment_guest(request)
+
+    if not allowed:
+        return Response(
+            {
+                "detail": f"Daily limit reached ({limit} files/day). "
+                          f"{'Sign up for more.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
+                "used": used,
+                "limit": limit,
+            },
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
+    def to_int(v, default):
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return default
+
+    def to_float(v, default):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return default
+
+    font_size = to_int(request.data.get("font_size", 60), 60)
+    opacity = to_float(request.data.get("opacity", 0.3), 0.3)
+    color = request.data.get("color", "#FF0000")
+    position = request.data.get("position", "diagonal")
+    if position not in ("center", "diagonal"):
+        position = "diagonal"
+
+    upload_dir = Path(settings.MEDIA_ROOT) / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{uuid.uuid4().hex}.pdf"
+    filepath = upload_dir / filename
+    with open(filepath, "wb+") as dest:
+        for chunk in f.chunks():
+            dest.write(chunk)
+
+    job = Job.objects.create(
+        user=request.user if request.user.is_authenticated else None,
+        tool="watermark",
+        status="pending",
+        input_files=[filename],
+        options={
+            "text": text,
+            "font_size": font_size,
+            "opacity": opacity,
+            "color": color,
+            "position": position,
+        },
+    )
+
+    watermark_pdf_task.delay(str(job.id))
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)

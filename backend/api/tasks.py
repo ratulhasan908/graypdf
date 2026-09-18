@@ -749,3 +749,133 @@ def unlock_pdf_task(self, job_id):
         job.error_message = str(e)
         job.save(update_fields=["status", "error_message"])
         return {"error": str(e)}
+
+
+
+
+@shared_task(bind=True)
+def watermark_pdf_task(self, job_id):
+    """
+    Add a text watermark to every page.
+    Options:
+      - text: string
+      - font_size: int (default: 60)
+      - opacity: float 0..1 (default: 0.3)
+      - color: hex "#RRGGBB" (default: "#FF0000")
+      - position: "center" | "diagonal" (default: "diagonal")
+    """
+    import io
+    from reportlab.pdfgen import canvas as rl_canvas
+    from reportlab.lib.colors import HexColor
+    from reportlab.lib.pagesizes import letter
+    from pypdf import PdfReader, PdfWriter
+
+    try:
+        job = Job.objects.get(id=job_id)
+    except Job.DoesNotExist:
+        return {"error": "Job not found"}
+
+    try:
+        job.status = "processing"
+        job.save(update_fields=["status"])
+
+        upload_dir = Path(settings.MEDIA_ROOT) / "uploads"
+        output_dir = Path(settings.MEDIA_ROOT) / "outputs"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        if not job.input_files:
+            raise ValueError("No input file found.")
+
+        input_path = upload_dir / job.input_files[0]
+        if not input_path.exists():
+            raise FileNotFoundError(f"Input file missing: {input_path.name}")
+
+        options = job.options or {}
+        text = str(options.get("text", "")).strip()
+        if not text:
+            raise ValueError("Watermark text is required.")
+
+        font_size = int(options.get("font_size", 60))
+        opacity = float(options.get("opacity", 0.3))
+        color_hex = options.get("color", "#FF0000")
+        position = options.get("position", "diagonal")
+
+        # Clamp values
+        font_size = max(10, min(font_size, 200))
+        opacity = max(0.05, min(opacity, 1.0))
+        if not color_hex.startswith("#"):
+            color_hex = "#FF0000"
+
+        try:
+            color = HexColor(color_hex)
+        except Exception:
+            color = HexColor("#FF0000")
+
+        reader = PdfReader(str(input_path))
+        writer = PdfWriter()
+
+        for page in reader.pages:
+            # Get page dimensions (in points)
+            page_width = float(page.mediabox.width)
+            page_height = float(page.mediabox.height)
+
+            # Create a transparent overlay PDF the same size as this page
+            packet = io.BytesIO()
+            can = rl_canvas.Canvas(packet, pagesize=(page_width, page_height))
+
+            can.saveState()
+            try:
+                can.setFillAlpha(opacity)
+            except Exception:
+                pass
+
+            can.setFillColor(color)
+            can.setFont("Helvetica-Bold", font_size)
+
+            if position == "diagonal":
+                # Rotate 45° and draw from bottom-left to top-right
+                can.translate(page_width / 2, page_height / 2)
+                can.rotate(45)
+                text_width = can.stringWidth(text, "Helvetica-Bold", font_size)
+                can.drawString(-text_width / 2, -font_size / 3)
+            else:
+                # Center horizontally and vertically
+                text_width = can.stringWidth(text, "Helvetica-Bold", font_size)
+                can.drawString(
+                    (page_width - text_width) / 2,
+                    (page_height - font_size) / 2,
+                )
+
+            can.restoreState()
+            can.save()
+            packet.seek(0)
+
+            overlay = PdfReader(packet)
+            overlay_page = overlay.pages[0]
+
+            # Merge overlay onto the current page
+            page.merge_page(overlay_page)
+            writer.add_page(page)
+
+        output_name = f"{uuid.uuid4().hex}.pdf"
+        output_path = output_dir / output_name
+        with open(output_path, "wb") as f:
+            writer.write(f)
+
+        job.status = "completed"
+        job.output_file = f"outputs/{output_name}"
+        job.completed_at = datetime.now()
+        job.save(update_fields=["status", "output_file", "completed_at"])
+
+        try:
+            os.remove(input_path)
+        except OSError:
+            pass
+
+        return {"status": "completed"}
+
+    except Exception as e:
+        job.status = "failed"
+        job.error_message = str(e)
+        job.save(update_fields=["status", "error_message"])
+        return {"error": str(e)}
