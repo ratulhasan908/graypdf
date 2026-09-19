@@ -1,9 +1,9 @@
 "use client";
 
 import { useState, ChangeEvent, DragEvent, useRef } from "react";
-import Link from "next/link";
 import { apiUpload, apiFetch } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
+import ToolLayout from "@/components/ToolLayout";
 
 type Job = {
     id: string;
@@ -115,129 +115,129 @@ export default function UnlockPdfPage() {
     }
 
     return (
-        <main className="min-h-screen bg-gray-50 px-4 py-12">
-            <div className="max-w-2xl mx-auto">
-                <Link href="/" className="text-sm text-blue-600 hover:underline">
-                    ← Back to tools
-                </Link>
-
-                <h1 className="text-3xl font-bold mt-4 mb-2">Unlock PDF</h1>
-                <p className="text-gray-500 mb-8">
-                    Remove password protection from your PDF.
-                </p>
-
-                {!job && (
-                    <>
-                        <div
-                            onDrop={handleDrop}
-                            onDragOver={(e) => {
-                                e.preventDefault();
-                                setDragActive(true);
-                            }}
-                            onDragLeave={() => setDragActive(false)}
-                            className={`border-2 border-dashed rounded-lg p-12 text-center cursor-pointer transition ${dragActive
-                                    ? "border-blue-500 bg-blue-50"
-                                    : "border-gray-300 bg-white hover:border-blue-400"
-                                }`}
-                            onClick={() => document.getElementById("file-input")?.click()}
-                        >
-                            {file ? (
-                                <>
-                                    <p className="text-lg font-medium mb-1">{file.name}</p>
-                                    <p className="text-sm text-gray-500">
-                                        {(file.size / 1024 / 1024).toFixed(2)} MB — click to change
-                                    </p>
-                                </>
-                            ) : (
-                                <>
-                                    <p className="text-lg font-medium mb-1">
-                                        Drag & drop a PDF here
-                                    </p>
-                                    <p className="text-sm text-gray-500">or click to browse</p>
-                                </>
-                            )}
-                            <input
-                                id="file-input"
-                                type="file"
-                                accept="application/pdf"
-                                onChange={handleFileChange}
-                                className="hidden"
-                            />
-                        </div>
-
-                        <div className="mt-6 bg-white rounded-lg shadow p-5">
-                            <label className="block text-sm font-medium text-gray-700 mb-2">
-                                Password (leave empty if PDF has no password)
-                            </label>
-                            <input
-                                type="password"
-                                value={password}
-                                onChange={(e) => setPassword(e.target.value)}
-                                className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                placeholder="Current PDF password"
-                            />
-                            <p className="text-xs text-gray-500 mt-2">
-                                If the PDF is protected, enter the password to remove it.
-                            </p>
-                        </div>
-
-                        {error && (
-                            <div className="mt-4 bg-red-50 text-red-600 p-3 rounded text-sm">
-                                {error}
-                            </div>
+        <ToolLayout
+            icon="🔓"
+            title="Unlock PDF"
+            description="Remove password protection from your PDF."
+            color="from-green-500 to-green-600"
+        >
+            {!job && (
+                <>
+                    <div
+                        onDrop={handleDrop}
+                        onDragOver={(e) => {
+                            e.preventDefault();
+                            setDragActive(true);
+                        }}
+                        onDragLeave={() => setDragActive(false)}
+                        className={`border-2 border-dashed rounded-2xl p-12 text-center cursor-pointer transition-all ${dragActive
+                                ? "border-[#22396F] bg-white/80 scale-[1.01]"
+                                : "border-[#e5dcb8] bg-white/70 hover:border-[#22396F] hover:bg-white"
+                            }`}
+                        onClick={() => document.getElementById("file-input")?.click()}
+                    >
+                        {file ? (
+                            <>
+                                <p className="text-lg font-medium mb-1 text-[#010736]">
+                                    {file.name}
+                                </p>
+                                <p className="text-sm text-[#0D1C42]/60">
+                                    {(file.size / 1024 / 1024).toFixed(2)} MB — click to change
+                                </p>
+                            </>
+                        ) : (
+                            <>
+                                <p className="text-lg font-medium mb-1 text-[#010736]">
+                                    Drag & drop a PDF here
+                                </p>
+                                <p className="text-sm text-[#0D1C42]/60">
+                                    or click to browse
+                                </p>
+                            </>
                         )}
-
-                        <button
-                            onClick={handleUnlock}
-                            disabled={!file || loading}
-                            className="mt-6 w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 rounded transition disabled:opacity-50"
-                        >
-                            {loading ? "Uploading..." : "Unlock PDF"}
-                        </button>
-                    </>
-                )}
-
-                {job && (job.status === "pending" || job.status === "processing") && (
-                    <div className="bg-white rounded-lg shadow p-12 text-center">
-                        <div className="inline-block animate-spin rounded-full h-12 w-12 border-4 border-blue-600 border-t-transparent mb-4"></div>
-                        <h2 className="text-xl font-bold mb-2">
-                            {job.status === "pending" ? "Queued..." : "Unlocking..."}
-                        </h2>
+                        <input
+                            id="file-input"
+                            type="file"
+                            accept="application/pdf"
+                            onChange={handleFileChange}
+                            className="hidden"
+                        />
                     </div>
-                )}
 
-                {job && job.status === "completed" && job.download_url && (
-                    <div className="bg-white rounded-lg shadow p-8 text-center">
-                        <div className="text-5xl mb-4">🔓</div>
-                        <h2 className="text-xl font-bold mb-2">PDF unlocked</h2>
-                        <p className="text-gray-500 mb-6">
-                            Password removed. Your unlocked PDF is ready.
+                    <div className="mt-6 card p-5">
+                        <label className="block text-sm font-semibold text-[#010736] mb-2">
+                            Password (leave empty if PDF has no password)
+                        </label>
+                        <input
+                            type="password"
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            className="w-full px-3 py-2 border border-[#e5dcb8] rounded-lg bg-white/70 focus:outline-none focus:ring-2 focus:ring-[#22396F] text-[#010736]"
+                            placeholder="Current PDF password"
+                        />
+                        <p className="text-xs text-[#0D1C42]/60 mt-2">
+                            If the PDF is protected, enter the password to remove it.
                         </p>
-                        <a
-                            href={job.download_url}
-                            className="inline-block bg-green-600 hover:bg-green-700 text-white font-medium py-3 px-8 rounded transition"
-                        >
-                            Download unlocked PDF
-                        </a>
-                        <button
-                            onClick={reset}
-                            className="block mx-auto mt-4 text-sm text-blue-600 hover:underline"
-                        >
-                            Unlock another PDF
-                        </button>
                     </div>
-                )}
 
-                {job && job.status === "failed" && (
-                    <div className="bg-red-50 text-red-600 p-4 rounded">
-                        <p className="font-bold mb-1">Unlock failed</p>
-                        <p className="text-sm">{job.error_message}</p>
-                        <button onClick={reset} className="mt-3 text-sm underline">
-                            Try again
-                        </button>
-                    </div>
-                )}
-            </div>
-        </main>
+                    {error && (
+                        <div className="mt-4 bg-red-50 border border-red-200 text-red-700 p-3 rounded-lg text-sm">
+                            {error}
+                        </div>
+                    )}
+
+                    <button
+                        onClick={handleUnlock}
+                        disabled={!file || loading}
+                        className="btn-primary mt-6 w-full"
+                    >
+                        {loading ? "Uploading..." : "Unlock PDF"}
+                    </button>
+                </>
+            )}
+
+            {job && (job.status === "pending" || job.status === "processing") && (
+                <div className="card p-12 text-center animate-fade-in">
+                    <div className="inline-block animate-spin rounded-full h-12 w-12 border-4 border-[#22396F] border-t-transparent mb-4"></div>
+                    <h2 className="text-xl font-bold mb-2 text-[#010736]">
+                        {job.status === "pending" ? "Queued..." : "Unlocking..."}
+                    </h2>
+                </div>
+            )}
+
+            {job && job.status === "completed" && job.download_url && (
+                <div className="card p-8 text-center animate-scale-in">
+                    <div className="text-5xl mb-4">🔓</div>
+                    <h2 className="text-xl font-bold mb-2 text-[#010736]">
+                        PDF unlocked
+                    </h2>
+                    <p className="text-[#0D1C42]/60 mb-6">
+                        Password removed. Your unlocked PDF is ready.
+                    </p>
+                    <a
+                        href={job.download_url}
+                        className="inline-flex items-center gap-2 bg-gradient-to-br from-emerald-500 to-emerald-600 hover:brightness-110 text-white font-semibold py-3 px-8 rounded-xl transition-all shadow-sm hover:shadow-md"
+                    >
+                        Download unlocked PDF
+                    </a>
+                    <button
+                        onClick={reset}
+                        className="block mx-auto mt-4 text-sm font-medium text-[#22396F] hover:underline"
+                    >
+                        Unlock another PDF
+                    </button>
+                </div>
+            )}
+
+            {job && job.status === "failed" && (
+                <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl">
+                    <p className="font-bold mb-1">Unlock failed</p>
+                    <p className="text-sm">{job.error_message}</p>
+                    <button onClick={reset} className="mt-3 text-sm font-medium underline">
+                        Try again
+                    </button>
+                </div>
+            )}
+        </ToolLayout>
     );
 }

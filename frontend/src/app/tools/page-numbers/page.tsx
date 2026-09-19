@@ -1,9 +1,9 @@
 "use client";
 
 import { useState, ChangeEvent, DragEvent, useRef } from "react";
-import Link from "next/link";
 import { apiUpload, apiFetch } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
+import ToolLayout from "@/components/ToolLayout";
 
 type Job = {
     id: string;
@@ -147,217 +147,214 @@ export default function PageNumbersPage() {
     }
 
     return (
-        <main className="min-h-screen bg-gray-50 px-4 py-12">
-            <div className="max-w-2xl mx-auto">
-                <Link href="/" className="text-sm text-blue-600 hover:underline">
-                    ← Back to tools
-                </Link>
+        <ToolLayout
+            icon="🔢"
+            title="Add Page Numbers"
+            description="Insert page numbers into your PDF with full control over position and format."
+            color="from-indigo-500 to-indigo-600"
+        >
+            {!job && (
+                <>
+                    <div
+                        onDrop={handleDrop}
+                        onDragOver={(e) => {
+                            e.preventDefault();
+                            setDragActive(true);
+                        }}
+                        onDragLeave={() => setDragActive(false)}
+                        className={`border-2 border-dashed rounded-2xl p-12 text-center cursor-pointer transition-all ${dragActive
+                                ? "border-[#22396F] bg-white/80 scale-[1.01]"
+                                : "border-[#e5dcb8] bg-white/70 hover:border-[#22396F] hover:bg-white"
+                            }`}
+                        onClick={() => document.getElementById("file-input")?.click()}
+                    >
+                        {file ? (
+                            <>
+                                <p className="text-lg font-medium mb-1 text-[#010736]">
+                                    {file.name}
+                                </p>
+                                <p className="text-sm text-[#0D1C42]/60">
+                                    {(file.size / 1024 / 1024).toFixed(2)} MB — click to change
+                                </p>
+                            </>
+                        ) : (
+                            <>
+                                <p className="text-lg font-medium mb-1 text-[#010736]">
+                                    Drag & drop a PDF here
+                                </p>
+                                <p className="text-sm text-[#0D1C42]/60">
+                                    or click to browse
+                                </p>
+                            </>
+                        )}
+                        <input
+                            id="file-input"
+                            type="file"
+                            accept="application/pdf"
+                            onChange={handleFileChange}
+                            className="hidden"
+                        />
+                    </div>
 
-                <h1 className="text-3xl font-bold mt-4 mb-2">Add Page Numbers</h1>
-                <p className="text-gray-500 mb-8">
-                    Insert page numbers into your PDF with full control over position
-                    and format.
-                </p>
+                    <div className="mt-6 card p-5">
+                        <p className="text-sm font-semibold text-[#010736] mb-3">
+                            Position
+                        </p>
+                        <div className="grid grid-cols-3 gap-2">
+                            {POSITIONS.map((p) => (
+                                <button
+                                    key={p.value}
+                                    type="button"
+                                    onClick={() => setPosition(p.value)}
+                                    className={`py-3 rounded-xl border-2 text-center transition ${position === p.value
+                                            ? "border-[#22396F] bg-[#FCF1D0] text-[#010736]"
+                                            : "border-[#e5dcb8] bg-white/70 text-[#0D1C42] hover:border-[#22396F]"
+                                        }`}
+                                >
+                                    <div className="text-xl">{p.grid}</div>
+                                    <div className="text-xs mt-1 font-medium">{p.label}</div>
+                                </button>
+                            ))}
+                        </div>
+                    </div>
 
-                {!job && (
-                    <>
-                        {/* Drop zone */}
-                        <div
-                            onDrop={handleDrop}
-                            onDragOver={(e) => {
-                                e.preventDefault();
-                                setDragActive(true);
-                            }}
-                            onDragLeave={() => setDragActive(false)}
-                            className={`border-2 border-dashed rounded-lg p-12 text-center cursor-pointer transition ${dragActive
-                                    ? "border-blue-500 bg-blue-50"
-                                    : "border-gray-300 bg-white hover:border-blue-400"
-                                }`}
-                            onClick={() => document.getElementById("file-input")?.click()}
-                        >
-                            {file ? (
-                                <>
-                                    <p className="text-lg font-medium mb-1">{file.name}</p>
-                                    <p className="text-sm text-gray-500">
-                                        {(file.size / 1024 / 1024).toFixed(2)} MB — click to change
-                                    </p>
-                                </>
-                            ) : (
-                                <>
-                                    <p className="text-lg font-medium mb-1">
-                                        Drag & drop a PDF here
-                                    </p>
-                                    <p className="text-sm text-gray-500">or click to browse</p>
-                                </>
-                            )}
+                    <div className="mt-6 card p-5">
+                        <p className="text-sm font-semibold text-[#010736] mb-3">
+                            Format
+                        </p>
+                        <div className="space-y-3">
+                            {FORMATS.map((f) => (
+                                <label
+                                    key={f.value}
+                                    className="flex items-start gap-3 cursor-pointer"
+                                >
+                                    <input
+                                        type="radio"
+                                        name="format"
+                                        value={f.value}
+                                        checked={format === f.value}
+                                        onChange={() => setFormat(f.value)}
+                                        className="mt-1"
+                                    />
+                                    <div>
+                                        <p className="font-medium text-sm text-[#010736]">
+                                            {f.label}
+                                        </p>
+                                        <p className="text-xs text-[#0D1C42]/60">
+                                            Example: {f.example}
+                                        </p>
+                                    </div>
+                                </label>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="mt-6 card p-5 space-y-4">
+                        <p className="text-sm font-semibold text-[#010736]">
+                            Fine-tuning
+                        </p>
+
+                        <div>
+                            <label className="block text-sm text-[#010736] mb-1">
+                                Starting number: {start}
+                            </label>
                             <input
-                                id="file-input"
-                                type="file"
-                                accept="application/pdf"
-                                onChange={handleFileChange}
-                                className="hidden"
+                                type="number"
+                                min={0}
+                                max={9999}
+                                value={start}
+                                onChange={(e) => setStart(Number(e.target.value) || 1)}
+                                className="w-full px-3 py-2 border border-[#e5dcb8] rounded-lg bg-white/70 focus:outline-none focus:ring-2 focus:ring-[#22396F] text-[#010736]"
                             />
                         </div>
 
-                        {/* Position grid */}
-                        <div className="mt-6 bg-white rounded-lg shadow p-5">
-                            <p className="text-sm font-medium text-gray-700 mb-3">
-                                Position
-                            </p>
-                            <div className="grid grid-cols-3 gap-2">
-                                {POSITIONS.map((p) => (
-                                    <button
-                                        key={p.value}
-                                        type="button"
-                                        onClick={() => setPosition(p.value)}
-                                        className={`py-3 rounded border-2 text-center transition ${position === p.value
-                                                ? "border-blue-600 bg-blue-50 text-blue-700"
-                                                : "border-gray-200 text-gray-700 hover:border-gray-300"
-                                            }`}
-                                    >
-                                        <div className="text-xl">{p.grid}</div>
-                                        <div className="text-xs mt-1">{p.label}</div>
-                                    </button>
-                                ))}
-                            </div>
+                        <div>
+                            <label className="block text-sm text-[#010736] mb-1">
+                                Font size: {fontSize}px
+                            </label>
+                            <input
+                                type="range"
+                                min={8}
+                                max={30}
+                                value={fontSize}
+                                onChange={(e) => setFontSize(Number(e.target.value))}
+                                className="w-full accent-[#22396F]"
+                            />
                         </div>
 
-                        {/* Format */}
-                        <div className="mt-6 bg-white rounded-lg shadow p-5">
-                            <p className="text-sm font-medium text-gray-700 mb-3">
-                                Format
-                            </p>
-                            <div className="space-y-3">
-                                {FORMATS.map((f) => (
-                                    <label
-                                        key={f.value}
-                                        className="flex items-start gap-3 cursor-pointer"
-                                    >
-                                        <input
-                                            type="radio"
-                                            name="format"
-                                            value={f.value}
-                                            checked={format === f.value}
-                                            onChange={() => setFormat(f.value)}
-                                            className="mt-1"
-                                        />
-                                        <div>
-                                            <p className="font-medium text-sm">{f.label}</p>
-                                            <p className="text-xs text-gray-500">
-                                                Example: {f.example}
-                                            </p>
-                                        </div>
-                                    </label>
-                                ))}
-                            </div>
+                        <div>
+                            <label className="block text-sm text-[#010736] mb-1">
+                                Margin from edge: {margin}px
+                            </label>
+                            <input
+                                type="range"
+                                min={20}
+                                max={100}
+                                value={margin}
+                                onChange={(e) => setMargin(Number(e.target.value))}
+                                className="w-full accent-[#22396F]"
+                            />
                         </div>
+                    </div>
 
-                        {/* Advanced options */}
-                        <div className="mt-6 bg-white rounded-lg shadow p-5 space-y-4">
-                            <p className="text-sm font-medium text-gray-700">
-                                Fine-tuning
-                            </p>
-
-                            <div>
-                                <label className="block text-sm text-gray-700 mb-1">
-                                    Starting number: {start}
-                                </label>
-                                <input
-                                    type="number"
-                                    min={0}
-                                    max={9999}
-                                    value={start}
-                                    onChange={(e) => setStart(Number(e.target.value) || 1)}
-                                    className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                />
-                            </div>
-
-                            <div>
-                                <label className="block text-sm text-gray-700 mb-1">
-                                    Font size: {fontSize}px
-                                </label>
-                                <input
-                                    type="range"
-                                    min={8}
-                                    max={30}
-                                    value={fontSize}
-                                    onChange={(e) => setFontSize(Number(e.target.value))}
-                                    className="w-full"
-                                />
-                            </div>
-
-                            <div>
-                                <label className="block text-sm text-gray-700 mb-1">
-                                    Margin from edge: {margin}px
-                                </label>
-                                <input
-                                    type="range"
-                                    min={20}
-                                    max={100}
-                                    value={margin}
-                                    onChange={(e) => setMargin(Number(e.target.value))}
-                                    className="w-full"
-                                />
-                            </div>
+                    {error && (
+                        <div className="mt-4 bg-red-50 border border-red-200 text-red-700 p-3 rounded-lg text-sm">
+                            {error}
                         </div>
+                    )}
 
-                        {error && (
-                            <div className="mt-4 bg-red-50 text-red-600 p-3 rounded text-sm">
-                                {error}
-                            </div>
-                        )}
+                    <button
+                        onClick={handleApply}
+                        disabled={!file || loading}
+                        className="btn-primary mt-6 w-full"
+                    >
+                        {loading ? "Uploading..." : "Add page numbers"}
+                    </button>
+                </>
+            )}
 
-                        <button
-                            onClick={handleApply}
-                            disabled={!file || loading}
-                            className="mt-6 w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 rounded transition disabled:opacity-50"
-                        >
-                            {loading ? "Uploading..." : "Add page numbers"}
-                        </button>
-                    </>
-                )}
+            {job && (job.status === "pending" || job.status === "processing") && (
+                <div className="card p-12 text-center animate-fade-in">
+                    <div className="inline-block animate-spin rounded-full h-12 w-12 border-4 border-[#22396F] border-t-transparent mb-4"></div>
+                    <h2 className="text-xl font-bold mb-2 text-[#010736]">
+                        {job.status === "pending" ? "Queued..." : "Adding numbers..."}
+                    </h2>
+                </div>
+            )}
 
-                {job && (job.status === "pending" || job.status === "processing") && (
-                    <div className="bg-white rounded-lg shadow p-12 text-center">
-                        <div className="inline-block animate-spin rounded-full h-12 w-12 border-4 border-blue-600 border-t-transparent mb-4"></div>
-                        <h2 className="text-xl font-bold mb-2">
-                            {job.status === "pending" ? "Queued..." : "Adding numbers..."}
-                        </h2>
-                    </div>
-                )}
+            {job && job.status === "completed" && job.download_url && (
+                <div className="card p-8 text-center animate-scale-in">
+                    <div className="text-5xl mb-4">🔢</div>
+                    <h2 className="text-xl font-bold mb-2 text-[#010736]">
+                        Page numbers added
+                    </h2>
+                    <p className="text-[#0D1C42]/60 mb-6">
+                        Your PDF is ready to download.
+                    </p>
+                    <a
+                        href={job.download_url}
+                        className="inline-flex items-center gap-2 bg-gradient-to-br from-emerald-500 to-emerald-600 hover:brightness-110 text-white font-semibold py-3 px-8 rounded-xl transition-all shadow-sm hover:shadow-md"
+                    >
+                        Download numbered PDF
+                    </a>
+                    <button
+                        onClick={reset}
+                        className="block mx-auto mt-4 text-sm font-medium text-[#22396F] hover:underline"
+                    >
+                        Add to another PDF
+                    </button>
+                </div>
+            )}
 
-                {job && job.status === "completed" && job.download_url && (
-                    <div className="bg-white rounded-lg shadow p-8 text-center">
-                        <div className="text-5xl mb-4">🔢</div>
-                        <h2 className="text-xl font-bold mb-2">Page numbers added</h2>
-                        <p className="text-gray-500 mb-6">
-                            Your PDF is ready to download.
-                        </p>
-                        <a
-                            href={job.download_url}
-                            className="inline-block bg-green-600 hover:bg-green-700 text-white font-medium py-3 px-8 rounded transition"
-                        >
-                            Download numbered PDF
-                        </a>
-                        <button
-                            onClick={reset}
-                            className="block mx-auto mt-4 text-sm text-blue-600 hover:underline"
-                        >
-                            Add to another PDF
-                        </button>
-                    </div>
-                )}
-
-                {job && job.status === "failed" && (
-                    <div className="bg-red-50 text-red-600 p-4 rounded">
-                        <p className="font-bold mb-1">Failed</p>
-                        <p className="text-sm">{job.error_message}</p>
-                        <button onClick={reset} className="mt-3 text-sm underline">
-                            Try again
-                        </button>
-                    </div>
-                )}
-            </div>
-        </main>
+            {job && job.status === "failed" && (
+                <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl">
+                    <p className="font-bold mb-1">Failed</p>
+                    <p className="text-sm">{job.error_message}</p>
+                    <button onClick={reset} className="mt-3 text-sm font-medium underline">
+                        Try again
+                    </button>
+                </div>
+            )}
+        </ToolLayout>
     );
 }

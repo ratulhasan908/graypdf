@@ -1,9 +1,9 @@
 "use client";
 
 import { useState, ChangeEvent, DragEvent, useRef } from "react";
-import Link from "next/link";
 import { apiUpload, apiFetch } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
+import ToolLayout from "@/components/ToolLayout";
 
 type Job = {
     id: string;
@@ -17,10 +17,9 @@ type Job = {
 type Unit = "pt" | "mm" | "in";
 type ApplyTo = "all" | "first" | "last";
 
-// Conversion factors to points (72 pt = 1 inch)
 const TO_POINTS: Record<Unit, number> = {
     pt: 1,
-    mm: 72 / 25.4, // ≈ 2.835
+    mm: 72 / 25.4,
     in: 72,
 };
 
@@ -120,7 +119,6 @@ export default function CropPdfPage() {
         setJob(null);
 
         try {
-            // Convert all values to points for the backend
             const conv = TO_POINTS[unit];
             const formData = new FormData();
             formData.append("files", file);
@@ -160,290 +158,295 @@ export default function CropPdfPage() {
     }
 
     return (
-        <main className="min-h-screen bg-gray-50 px-4 py-12">
-            <div className="max-w-2xl mx-auto">
-                <Link href="/" className="text-sm text-blue-600 hover:underline">
-                    ← Back to tools
-                </Link>
+        <ToolLayout
+            icon="✂️"
+            title="Crop PDF"
+            description="Trim margins from your PDF pages. Enter crop amounts for each side."
+            color="from-orange-500 to-orange-600"
+        >
+            {!job && (
+                <>
+                    <div
+                        onDrop={handleDrop}
+                        onDragOver={(e) => {
+                            e.preventDefault();
+                            setDragActive(true);
+                        }}
+                        onDragLeave={() => setDragActive(false)}
+                        className={`border-2 border-dashed rounded-2xl p-12 text-center cursor-pointer transition-all ${dragActive
+                                ? "border-[#22396F] bg-white/80 scale-[1.01]"
+                                : "border-[#e5dcb8] bg-white/70 hover:border-[#22396F] hover:bg-white"
+                            }`}
+                        onClick={() => document.getElementById("file-input")?.click()}
+                    >
+                        {file ? (
+                            <>
+                                <p className="text-lg font-medium mb-1 text-[#010736]">
+                                    {file.name}
+                                </p>
+                                <p className="text-sm text-[#0D1C42]/60">
+                                    {(file.size / 1024 / 1024).toFixed(2)} MB — click to change
+                                </p>
+                            </>
+                        ) : (
+                            <>
+                                <p className="text-lg font-medium mb-1 text-[#010736]">
+                                    Drag & drop a PDF here
+                                </p>
+                                <p className="text-sm text-[#0D1C42]/60">
+                                    or click to browse
+                                </p>
+                            </>
+                        )}
+                        <input
+                            id="file-input"
+                            type="file"
+                            accept="application/pdf"
+                            onChange={handleFileChange}
+                            className="hidden"
+                        />
+                    </div>
 
-                <h1 className="text-3xl font-bold mt-4 mb-2">Crop PDF</h1>
-                <p className="text-gray-500 mb-8">
-                    Trim margins from your PDF pages. Enter crop amounts for each side.
-                </p>
-
-                {!job && (
-                    <>
-                        <div
-                            onDrop={handleDrop}
-                            onDragOver={(e) => {
-                                e.preventDefault();
-                                setDragActive(true);
-                            }}
-                            onDragLeave={() => setDragActive(false)}
-                            className={`border-2 border-dashed rounded-lg p-12 text-center cursor-pointer transition ${dragActive
-                                    ? "border-blue-500 bg-blue-50"
-                                    : "border-gray-300 bg-white hover:border-blue-400"
-                                }`}
-                            onClick={() => document.getElementById("file-input")?.click()}
-                        >
-                            {file ? (
-                                <>
-                                    <p className="text-lg font-medium mb-1">{file.name}</p>
-                                    <p className="text-sm text-gray-500">
-                                        {(file.size / 1024 / 1024).toFixed(2)} MB — click to change
-                                    </p>
-                                </>
-                            ) : (
-                                <>
-                                    <p className="text-lg font-medium mb-1">
-                                        Drag & drop a PDF here
-                                    </p>
-                                    <p className="text-sm text-gray-500">or click to browse</p>
-                                </>
-                            )}
-                            <input
-                                id="file-input"
-                                type="file"
-                                accept="application/pdf"
-                                onChange={handleFileChange}
-                                className="hidden"
-                            />
+                    {/* Presets */}
+                    <div className="mt-6 card p-5">
+                        <p className="text-sm font-semibold text-[#010736] mb-3">
+                            Quick presets
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                            {PRESETS.map((p) => (
+                                <button
+                                    key={p.label}
+                                    type="button"
+                                    onClick={() => applyPreset(p.value, p.unit)}
+                                    className="px-3 py-2 text-sm border-2 border-[#e5dcb8] rounded-lg bg-white/70 hover:border-[#22396F] hover:bg-[#FCF1D0] text-[#010736] font-medium transition"
+                                >
+                                    {p.label} all sides
+                                </button>
+                            ))}
                         </div>
+                    </div>
 
-                        {/* Presets */}
-                        <div className="mt-6 bg-white rounded-lg shadow p-5">
-                            <p className="text-sm font-medium text-gray-700 mb-3">
-                                Quick presets
+                    {/* Unit + Dimensions */}
+                    <div className="mt-6 card p-5">
+                        <div className="flex items-center justify-between mb-4">
+                            <p className="text-sm font-semibold text-[#010736]">
+                                Crop amounts
                             </p>
-                            <div className="flex flex-wrap gap-2">
-                                {PRESETS.map((p) => (
+                            <div className="flex gap-1 bg-[#FCF1D0] rounded-lg p-1 border border-[#e5dcb8]">
+                                {(["mm", "in", "pt"] as Unit[]).map((u) => (
                                     <button
-                                        key={p.label}
+                                        key={u}
                                         type="button"
-                                        onClick={() => applyPreset(p.value, p.unit)}
-                                        className="px-3 py-2 text-sm border border-gray-300 rounded hover:border-blue-500 hover:bg-blue-50 transition"
+                                        onClick={() => setUnit(u)}
+                                        className={`text-xs px-3 py-1 rounded-md transition font-medium ${unit === u
+                                                ? "bg-white text-[#010736] shadow-sm"
+                                                : "text-[#0D1C42]/60 hover:text-[#010736]"
+                                            }`}
                                     >
-                                        {p.label} all sides
+                                        {u}
                                     </button>
                                 ))}
                             </div>
                         </div>
 
-                        {/* Unit + Dimensions */}
-                        <div className="mt-6 bg-white rounded-lg shadow p-5">
-                            <div className="flex items-center justify-between mb-4">
-                                <p className="text-sm font-medium text-gray-700">
-                                    Crop amounts
-                                </p>
-                                <div className="flex gap-1 bg-gray-100 rounded p-1">
-                                    {(["mm", "in", "pt"] as Unit[]).map((u) => (
-                                        <button
-                                            key={u}
-                                            type="button"
-                                            onClick={() => setUnit(u)}
-                                            className={`text-xs px-3 py-1 rounded transition ${unit === u
-                                                    ? "bg-white text-blue-600 font-medium shadow-sm"
-                                                    : "text-gray-600"
-                                                }`}
-                                        >
-                                            {u}
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-3">
-                                <div>
-                                    <label className="block text-xs text-gray-500 mb-1">
-                                        Top
-                                    </label>
-                                    <input
-                                        type="number"
-                                        min={0}
-                                        step="0.1"
-                                        value={top}
-                                        onChange={(e) =>
-                                            setTop(Math.max(0, Number(e.target.value) || 0))
-                                        }
-                                        className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-xs text-gray-500 mb-1">
-                                        Bottom
-                                    </label>
-                                    <input
-                                        type="number"
-                                        min={0}
-                                        step="0.1"
-                                        value={bottom}
-                                        onChange={(e) =>
-                                            setBottom(Math.max(0, Number(e.target.value) || 0))
-                                        }
-                                        className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-xs text-gray-500 mb-1">
-                                        Left
-                                    </label>
-                                    <input
-                                        type="number"
-                                        min={0}
-                                        step="0.1"
-                                        value={left}
-                                        onChange={(e) =>
-                                            setLeft(Math.max(0, Number(e.target.value) || 0))
-                                        }
-                                        className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-xs text-gray-500 mb-1">
-                                        Right
-                                    </label>
-                                    <input
-                                        type="number"
-                                        min={0}
-                                        step="0.1"
-                                        value={right}
-                                        onChange={(e) =>
-                                            setRight(Math.max(0, Number(e.target.value) || 0))
-                                        }
-                                        className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                    />
-                                </div>
-                            </div>
-
-                            {/* Visual preview */}
-                            <div className="mt-5 flex justify-center">
-                                <div className="relative w-48 h-64 bg-gray-100 border-2 border-gray-300">
-                                    <div
-                                        className="absolute bg-white border-2 border-blue-500 border-dashed"
-                                        style={{
-                                            top: `${Math.min(top * 3, 40)}px`,
-                                            bottom: `${Math.min(bottom * 3, 40)}px`,
-                                            left: `${Math.min(left * 3, 40)}px`,
-                                            right: `${Math.min(right * 3, 40)}px`,
-                                        }}
-                                    >
-                                        <div className="absolute inset-0 flex items-center justify-center text-xs text-gray-400">
-                                            visible area
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                            <p className="text-center text-xs text-gray-400 mt-2">
-                                Preview (approximate) — the shaded border shows what gets
-                                removed.
-                            </p>
-                        </div>
-
-                        {/* Apply to */}
-                        <div className="mt-6 bg-white rounded-lg shadow p-5">
-                            <p className="text-sm font-medium text-gray-700 mb-3">
-                                Apply to
-                            </p>
-                            <div className="space-y-3">
-                                <label className="flex items-start gap-3 cursor-pointer">
-                                    <input
-                                        type="radio"
-                                        name="applyTo"
-                                        value="all"
-                                        checked={applyTo === "all"}
-                                        onChange={() => setApplyTo("all")}
-                                        className="mt-1"
-                                    />
-                                    <div>
-                                        <p className="font-medium text-sm">All pages</p>
-                                    </div>
+                        <div className="grid grid-cols-2 gap-3">
+                            <div>
+                                <label className="block text-xs text-[#0D1C42]/60 mb-1">
+                                    Top
                                 </label>
-                                <label className="flex items-start gap-3 cursor-pointer">
-                                    <input
-                                        type="radio"
-                                        name="applyTo"
-                                        value="first"
-                                        checked={applyTo === "first"}
-                                        onChange={() => setApplyTo("first")}
-                                        className="mt-1"
-                                    />
-                                    <div>
-                                        <p className="font-medium text-sm">First page only</p>
-                                    </div>
+                                <input
+                                    type="number"
+                                    min={0}
+                                    step="0.1"
+                                    value={top}
+                                    onChange={(e) =>
+                                        setTop(Math.max(0, Number(e.target.value) || 0))
+                                    }
+                                    className="w-full px-3 py-2 border border-[#e5dcb8] rounded-lg bg-white/70 focus:outline-none focus:ring-2 focus:ring-[#22396F] text-[#010736]"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs text-[#0D1C42]/60 mb-1">
+                                    Bottom
                                 </label>
-                                <label className="flex items-start gap-3 cursor-pointer">
-                                    <input
-                                        type="radio"
-                                        name="applyTo"
-                                        value="last"
-                                        checked={applyTo === "last"}
-                                        onChange={() => setApplyTo("last")}
-                                        className="mt-1"
-                                    />
-                                    <div>
-                                        <p className="font-medium text-sm">Last page only</p>
-                                    </div>
+                                <input
+                                    type="number"
+                                    min={0}
+                                    step="0.1"
+                                    value={bottom}
+                                    onChange={(e) =>
+                                        setBottom(Math.max(0, Number(e.target.value) || 0))
+                                    }
+                                    className="w-full px-3 py-2 border border-[#e5dcb8] rounded-lg bg-white/70 focus:outline-none focus:ring-2 focus:ring-[#22396F] text-[#010736]"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs text-[#0D1C42]/60 mb-1">
+                                    Left
                                 </label>
+                                <input
+                                    type="number"
+                                    min={0}
+                                    step="0.1"
+                                    value={left}
+                                    onChange={(e) =>
+                                        setLeft(Math.max(0, Number(e.target.value) || 0))
+                                    }
+                                    className="w-full px-3 py-2 border border-[#e5dcb8] rounded-lg bg-white/70 focus:outline-none focus:ring-2 focus:ring-[#22396F] text-[#010736]"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs text-[#0D1C42]/60 mb-1">
+                                    Right
+                                </label>
+                                <input
+                                    type="number"
+                                    min={0}
+                                    step="0.1"
+                                    value={right}
+                                    onChange={(e) =>
+                                        setRight(Math.max(0, Number(e.target.value) || 0))
+                                    }
+                                    className="w-full px-3 py-2 border border-[#e5dcb8] rounded-lg bg-white/70 focus:outline-none focus:ring-2 focus:ring-[#22396F] text-[#010736]"
+                                />
                             </div>
                         </div>
 
-                        {error && (
-                            <div className="mt-4 bg-red-50 text-red-600 p-3 rounded text-sm">
-                                {error}
+                        {/* Visual preview */}
+                        <div className="mt-5 flex justify-center">
+                            <div className="relative w-48 h-64 bg-[#FCF1D0] border-2 border-[#e5dcb8] rounded-lg">
+                                <div
+                                    className="absolute bg-white border-2 border-[#22396F] border-dashed rounded"
+                                    style={{
+                                        top: `${Math.min(top * 3, 40)}px`,
+                                        bottom: `${Math.min(bottom * 3, 40)}px`,
+                                        left: `${Math.min(left * 3, 40)}px`,
+                                        right: `${Math.min(right * 3, 40)}px`,
+                                    }}
+                                >
+                                    <div className="absolute inset-0 flex items-center justify-center text-xs text-[#0D1C42]/40">
+                                        visible area
+                                    </div>
+                                </div>
                             </div>
-                        )}
-
-                        <button
-                            onClick={handleCrop}
-                            disabled={!file || loading}
-                            className="mt-6 w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 rounded transition disabled:opacity-50"
-                        >
-                            {loading ? "Uploading..." : "Crop PDF"}
-                        </button>
-                    </>
-                )}
-
-                {job && (job.status === "pending" || job.status === "processing") && (
-                    <div className="bg-white rounded-lg shadow p-12 text-center">
-                        <div className="inline-block animate-spin rounded-full h-12 w-12 border-4 border-blue-600 border-t-transparent mb-4"></div>
-                        <h2 className="text-xl font-bold mb-2">
-                            {job.status === "pending" ? "Queued..." : "Cropping..."}
-                        </h2>
-                    </div>
-                )}
-
-                {job && job.status === "completed" && job.download_url && (
-                    <div className="bg-white rounded-lg shadow p-8 text-center">
-                        <div className="text-5xl mb-4">✂️</div>
-                        <h2 className="text-xl font-bold mb-2">Crop complete</h2>
-                        <p className="text-gray-500 mb-6">
-                            Your cropped PDF is ready to download.
+                        </div>
+                        <p className="text-center text-xs text-[#0D1C42]/50 mt-2">
+                            Preview (approximate) — the outer border shows what gets removed.
                         </p>
-                        <a
-                            href={job.download_url}
-                            className="inline-block bg-green-600 hover:bg-green-700 text-white font-medium py-3 px-8 rounded transition"
-                        >
-                            Download cropped PDF
-                        </a>
-                        <button
-                            onClick={reset}
-                            className="block mx-auto mt-4 text-sm text-blue-600 hover:underline"
-                        >
-                            Crop another PDF
-                        </button>
                     </div>
-                )}
 
-                {job && job.status === "failed" && (
-                    <div className="bg-red-50 text-red-600 p-4 rounded">
-                        <p className="font-bold mb-1">Crop failed</p>
-                        <p className="text-sm">{job.error_message}</p>
-                        <button onClick={reset} className="mt-3 text-sm underline">
-                            Try again
-                        </button>
+                    {/* Apply to */}
+                    <div className="mt-6 card p-5">
+                        <p className="text-sm font-semibold text-[#010736] mb-3">
+                            Apply to
+                        </p>
+                        <div className="space-y-3">
+                            <label className="flex items-start gap-3 cursor-pointer">
+                                <input
+                                    type="radio"
+                                    name="applyTo"
+                                    value="all"
+                                    checked={applyTo === "all"}
+                                    onChange={() => setApplyTo("all")}
+                                    className="mt-1"
+                                />
+                                <div>
+                                    <p className="font-medium text-sm text-[#010736]">
+                                        All pages
+                                    </p>
+                                </div>
+                            </label>
+                            <label className="flex items-start gap-3 cursor-pointer">
+                                <input
+                                    type="radio"
+                                    name="applyTo"
+                                    value="first"
+                                    checked={applyTo === "first"}
+                                    onChange={() => setApplyTo("first")}
+                                    className="mt-1"
+                                />
+                                <div>
+                                    <p className="font-medium text-sm text-[#010736]">
+                                        First page only
+                                    </p>
+                                </div>
+                            </label>
+                            <label className="flex items-start gap-3 cursor-pointer">
+                                <input
+                                    type="radio"
+                                    name="applyTo"
+                                    value="last"
+                                    checked={applyTo === "last"}
+                                    onChange={() => setApplyTo("last")}
+                                    className="mt-1"
+                                />
+                                <div>
+                                    <p className="font-medium text-sm text-[#010736]">
+                                        Last page only
+                                    </p>
+                                </div>
+                            </label>
+                        </div>
                     </div>
-                )}
-            </div>
-        </main>
+
+                    {error && (
+                        <div className="mt-4 bg-red-50 border border-red-200 text-red-700 p-3 rounded-lg text-sm">
+                            {error}
+                        </div>
+                    )}
+
+                    <button
+                        onClick={handleCrop}
+                        disabled={!file || loading}
+                        className="btn-primary mt-6 w-full"
+                    >
+                        {loading ? "Uploading..." : "Crop PDF"}
+                    </button>
+                </>
+            )}
+
+            {job && (job.status === "pending" || job.status === "processing") && (
+                <div className="card p-12 text-center animate-fade-in">
+                    <div className="inline-block animate-spin rounded-full h-12 w-12 border-4 border-[#22396F] border-t-transparent mb-4"></div>
+                    <h2 className="text-xl font-bold mb-2 text-[#010736]">
+                        {job.status === "pending" ? "Queued..." : "Cropping..."}
+                    </h2>
+                </div>
+            )}
+
+            {job && job.status === "completed" && job.download_url && (
+                <div className="card p-8 text-center animate-scale-in">
+                    <div className="text-5xl mb-4">✂️</div>
+                    <h2 className="text-xl font-bold mb-2 text-[#010736]">
+                        Crop complete
+                    </h2>
+                    <p className="text-[#0D1C42]/60 mb-6">
+                        Your cropped PDF is ready to download.
+                    </p>
+                    <a
+                        href={job.download_url}
+                        className="inline-flex items-center gap-2 bg-gradient-to-br from-emerald-500 to-emerald-600 hover:brightness-110 text-white font-semibold py-3 px-8 rounded-xl transition-all shadow-sm hover:shadow-md"
+                    >
+                        Download cropped PDF
+                    </a>
+                    <button
+                        onClick={reset}
+                        className="block mx-auto mt-4 text-sm font-medium text-[#22396F] hover:underline"
+                    >
+                        Crop another PDF
+                    </button>
+                </div>
+            )}
+
+            {job && job.status === "failed" && (
+                <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl">
+                    <p className="font-bold mb-1">Crop failed</p>
+                    <p className="text-sm">{job.error_message}</p>
+                    <button onClick={reset} className="mt-3 text-sm font-medium underline">
+                        Try again
+                    </button>
+                </div>
+            )}
+        </ToolLayout>
     );
 }
