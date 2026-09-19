@@ -4,8 +4,14 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 
+function getInitials(name: string): string {
+    const parts = name.trim().split(/[\s._-]+/);
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+}
+
 export default function Navbar() {
-    const { user, usage, loading, logout, refreshUsage } = useAuth();
+    const { user, usage, loading, logout } = useAuth();
     const router = useRouter();
 
     async function handleLogout() {
@@ -14,22 +20,33 @@ export default function Navbar() {
     }
 
     return (
-        <nav className="bg-white border-b border-gray-200">
+        <nav className="sticky top-0 z-50 glass border-b border-[#e5dcb8]">
             <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
-                <Link href="/" className="text-2xl font-bold text-blue-600">
-                    GrayPDF
+                {/* Logo */}
+                <Link
+                    href="/"
+                    className="flex items-center gap-2 group"
+                    aria-label="GrayPDF home"
+                >
+                    <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#010736] to-[#22396f] flex items-center justify-center shadow-sm group-hover:shadow-md transition-shadow">
+                        <span className="text-[#FCF1D0] font-bold text-lg">G</span>
+                    </div>
+                    <span className="text-xl font-bold tracking-tight text-[#010736]">
+                        Gray<span className="text-[#22396F]">PDF</span>
+                    </span>
                 </Link>
 
-                <div className="flex items-center gap-4">
+                {/* Right side */}
+                <div className="flex items-center gap-2 sm:gap-3">
                     {/* Usage badge */}
                     {usage && (
                         <Link
                             href={user ? "/dashboard" : "/register"}
-                            className={`text-xs px-3 py-1 rounded-full font-medium transition ${usage.remaining === 0
-                                ? "bg-red-100 text-red-700 hover:bg-red-200"
-                                : usage.remaining <= 2
-                                    ? "bg-yellow-100 text-yellow-800 hover:bg-yellow-200"
-                                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                            className={`text-xs px-3 py-1.5 rounded-full font-medium transition-all border ${usage.remaining === 0
+                                    ? "bg-red-50 text-red-700 border-red-200 hover:bg-red-100"
+                                    : usage.remaining <= 2
+                                        ? "bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100"
+                                        : "bg-white/70 text-[#0D1C42] border-[#e5dcb8] hover:bg-white"
                                 }`}
                             title={
                                 usage.is_guest
@@ -41,20 +58,30 @@ export default function Navbar() {
                         </Link>
                     )}
 
-                    {loading ? null : user ? (
+                    {loading ? (
+                        <div className="w-20 h-8 skeleton rounded-lg" />
+                    ) : user ? (
                         <>
                             <Link
                                 href="/dashboard"
-                                className="text-sm text-gray-700 hover:text-blue-600"
+                                className="hidden sm:inline-block text-sm font-medium text-[#0D1C42] hover:text-[#22396F] transition-colors"
                             >
                                 Dashboard
                             </Link>
-                            <span className="text-sm text-gray-400 hidden sm:inline">
-                                {user.username}
-                            </span>
+
+                            {/* User chip with avatar */}
+                            <div className="flex items-center gap-2 pl-1 pr-3 py-1 rounded-full bg-white/70 border border-[#e5dcb8]">
+                                <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[#22396F] to-[#0D1C42] flex items-center justify-center text-[#FCF1D0] text-xs font-bold">
+                                    {getInitials(user.username)}
+                                </div>
+                                <span className="text-sm font-medium text-[#010736] hidden sm:inline max-w-[120px] truncate">
+                                    {user.username}
+                                </span>
+                            </div>
+
                             <button
                                 onClick={handleLogout}
-                                className="text-sm text-gray-700 hover:text-red-600"
+                                className="text-sm font-medium text-[#0D1C42] hover:text-red-600 transition-colors"
                             >
                                 Log out
                             </button>
@@ -63,13 +90,13 @@ export default function Navbar() {
                         <>
                             <Link
                                 href="/login"
-                                className="text-sm text-gray-700 hover:text-blue-600"
+                                className="text-sm font-medium text-[#0D1C42] hover:text-[#22396F] transition-colors px-3 py-2"
                             >
                                 Log in
                             </Link>
                             <Link
                                 href="/register"
-                                className="text-sm bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded transition"
+                                className="text-sm font-semibold bg-gradient-to-br from-[#010736] to-[#22396f] hover:brightness-110 text-[#FCF1D0] px-4 py-2 rounded-lg transition-all shadow-sm hover:shadow-md"
                             >
                                 Sign up
                             </Link>

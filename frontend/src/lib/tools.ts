@@ -3,6 +3,7 @@ export type Tool = {
     name: string;
     description: string;
     icon: string;
+    color: string; // tailwind color classes for icon tile
     available: boolean;
 };
 
@@ -12,6 +13,7 @@ export const tools: Tool[] = [
         name: "Merge PDF",
         description: "Combine PDFs in the order you want.",
         icon: "🔗",
+        color: "from-blue-500 to-blue-600",
         available: true,
     },
     {
@@ -19,6 +21,7 @@ export const tools: Tool[] = [
         name: "Split PDF",
         description: "Separate one page or a whole set into independent PDFs.",
         icon: "✂️",
+        color: "from-violet-500 to-violet-600",
         available: true,
     },
     {
@@ -26,6 +29,7 @@ export const tools: Tool[] = [
         name: "Compress PDF",
         description: "Reduce file size while keeping quality.",
         icon: "📉",
+        color: "from-emerald-500 to-emerald-600",
         available: true,
     },
     {
@@ -33,6 +37,7 @@ export const tools: Tool[] = [
         name: "PDF to JPG",
         description: "Convert each PDF page into a JPG image.",
         icon: "🖼️",
+        color: "from-rose-500 to-rose-600",
         available: true,
     },
     {
@@ -40,6 +45,7 @@ export const tools: Tool[] = [
         name: "JPG to PDF",
         description: "Convert JPG images to PDF in seconds.",
         icon: "📷",
+        color: "from-amber-500 to-amber-600",
         available: true,
     },
     {
@@ -47,6 +53,7 @@ export const tools: Tool[] = [
         name: "Rotate PDF",
         description: "Rotate your PDFs the way you need them.",
         icon: "🔄",
+        color: "from-cyan-500 to-cyan-600",
         available: true,
     },
     {
@@ -54,6 +61,7 @@ export const tools: Tool[] = [
         name: "Watermark",
         description: "Stamp an image or text over your PDF.",
         icon: "💧",
+        color: "from-sky-500 to-sky-600",
         available: true,
     },
     {
@@ -61,6 +69,7 @@ export const tools: Tool[] = [
         name: "Page Numbers",
         description: "Add page numbers into PDFs with ease.",
         icon: "🔢",
+        color: "from-indigo-500 to-indigo-600",
         available: true,
     },
     {
@@ -68,6 +77,7 @@ export const tools: Tool[] = [
         name: "Protect PDF",
         description: "Protect PDF files with a password.",
         icon: "🔒",
+        color: "from-red-500 to-red-600",
         available: true,
     },
     {
@@ -75,6 +85,7 @@ export const tools: Tool[] = [
         name: "Unlock PDF",
         description: "Remove PDF password security.",
         icon: "🔓",
+        color: "from-green-500 to-green-600",
         available: true,
     },
     {
@@ -82,6 +93,7 @@ export const tools: Tool[] = [
         name: "Organize PDF",
         description: "Sort, delete, or add PDF pages.",
         icon: "📑",
+        color: "from-fuchsia-500 to-fuchsia-600",
         available: true,
     },
     {
@@ -89,6 +101,7 @@ export const tools: Tool[] = [
         name: "Crop PDF",
         description: "Crop margins or select specific areas.",
         icon: "✂️",
+        color: "from-orange-500 to-orange-600",
         available: true,
     },
 ];

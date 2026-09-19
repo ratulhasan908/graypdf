@@ -1,26 +1,202 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* === GrayPDF Brand Palette === */
+  --navy-deep: #010736;
+  --navy-mid: #0d1c42;
+  --navy-light: #22396f;
+  --cream: #fcf1d0;
+
+  /* Semantic tokens */
+  --background: #fcf1d0;
+  --foreground: #010736;
+  --primary: #0d1c42;
+  --primary-hover: #22396f;
+  --accent: #22396f;
+  --border: #e5dcb8;
+  --card: #ffffff;
+  --muted: #6b7280;
+
+  /* Status */
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #ef4444;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-navy-deep: var(--navy-deep);
+  --color-navy-mid: var(--navy-mid);
+  --color-navy-light: var(--navy-light);
+  --color-cream: var(--cream);
+  --font-sans: var(--font-inter);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  box-sizing: border-box;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-inter), system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+*:focus-visible {
+  outline: 2px solid var(--navy-light);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+/* === Animations === */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -1000px 0;
+  }
+
+  100% {
+    background-position: 1000px 0;
+  }
+}
+
+@keyframes float {
+
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.4s ease-out;
+}
+
+.animate-scale-in {
+  animation: scaleIn 0.3s ease-out;
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+/* === Skeleton loader === */
+.skeleton {
+  background: linear-gradient(90deg,
+      #f4ecd0 0%,
+      #e5dcb8 50%,
+      #f4ecd0 100%);
+  background-size: 1000px 100%;
+  animation: shimmer 2s infinite linear;
+}
+
+/* === Custom scrollbar === */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c8bf9c;
+  border-radius: 5px;
+  border: 2px solid var(--background);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #a89f7e;
+}
+
+/* === Utility: gradient text === */
+.gradient-text {
+  background: linear-gradient(135deg, #010736 0%, #22396f 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* === Utility: primary button === */
+.btn-primary {
+  background: linear-gradient(135deg, #0d1c42 0%, #22396f 100%);
+  color: #fcf1d0;
+  font-weight: 600;
+  padding: 0.75rem 1.5rem;
+  border-radius: 12px;
+  transition: all 0.2s ease;
+  box-shadow: 0 1px 2px rgba(1, 7, 54, 0.08);
+}
+
+.btn-primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 24px rgba(1, 7, 54, 0.15);
+  filter: brightness(1.1);
+}
+
+.btn-primary:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* === Utility: card === */
+.card {
+  background: #ffffff;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  box-shadow: 0 1px 3px rgba(1, 7, 54, 0.04);
+  transition: all 0.25s ease;
+}
+
+.card-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 32px rgba(1, 7, 54, 0.08);
+  border-color: var(--navy-light);
+}
+
+/* === Gradient mesh background for hero === */
+.hero-bg {
+  background:
+    radial-gradient(circle at 15% 20%, rgba(34, 57, 111, 0.08) 0%, transparent 50%),
+    radial-gradient(circle at 85% 80%, rgba(13, 28, 66, 0.06) 0%, transparent 50%),
+    var(--cream);
 }

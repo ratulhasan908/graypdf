@@ -1220,3 +1220,23 @@ def crop_pdf(request):
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+@api_view(["GET"])
+def my_jobs(request):
+    """
+    List the current user's recent jobs (or guest jobs by session — not
+    tracked, so guests get empty list). Returns up to 10 most recent.
+    """
+    if not request.user.is_authenticated:
+        return Response({"jobs": []})
+
+    jobs = Job.objects.filter(user=request.user)[:10]
+    serializer = JobSerializer(jobs, many=True, context={"request": request})
+
+    total = Job.objects.filter(user=request.user).count()
+
+    return Response({
+        "jobs": serializer.data,
+        "total": total,
+    })

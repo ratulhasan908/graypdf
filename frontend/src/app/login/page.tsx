@@ -22,7 +22,16 @@ export default function LoginPage() {
             await login(email, password);
             router.push("/dashboard");
         } catch (err: any) {
-            setError(err.message || "Login failed.");
+            // Map backend errors to friendly messages
+            if (err.status === 401) {
+                setError("Incorrect email or password.");
+            } else if (err.status === 429) {
+                setError("Too many attempts. Please try again later.");
+            } else if (err.status === 400) {
+                setError(err.message || "Invalid login details.");
+            } else {
+                setError("Could not log in. Please check your connection and try again.");
+            }
         } finally {
             setLoading(false);
         }
@@ -37,7 +46,7 @@ export default function LoginPage() {
                 <p className="text-center text-gray-500 mb-6">Log in to your account</p>
 
                 {error && (
-                    <div className="bg-red-50 text-red-600 p-3 rounded mb-4 text-sm">
+                    <div className="bg-red-50 border border-red-200 text-red-700 p-3 rounded mb-4 text-sm">
                         {error}
                     </div>
                 )}
@@ -50,6 +59,7 @@ export default function LoginPage() {
                         <input
                             type="email"
                             required
+                            autoComplete="email"
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}
                             className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -64,6 +74,7 @@ export default function LoginPage() {
                         <input
                             type="password"
                             required
+                            autoComplete="current-password"
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
                             className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
