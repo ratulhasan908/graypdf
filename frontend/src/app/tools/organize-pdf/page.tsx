@@ -1,6 +1,19 @@
 "use client";
 
 import { useState, ChangeEvent, DragEvent, useRef } from "react";
+import {
+    LayoutGrid,
+    Upload,
+    FileText,
+    CheckCircle2,
+    Loader2,
+    AlertCircle,
+    Download,
+    RotateCcw,
+    X,
+    Copy,
+    GripVertical,
+} from "lucide-react";
 import { apiUpload, apiFetch } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import ToolLayout from "@/components/ToolLayout";
@@ -182,7 +195,7 @@ export default function OrganizePdfPage() {
 
     return (
         <ToolLayout
-            icon="📑"
+            icon={LayoutGrid}
             title="Organize PDF"
             description="Reorder, delete, or duplicate pages by dragging them around."
             color="from-fuchsia-500 to-fuchsia-600"
@@ -197,16 +210,50 @@ export default function OrganizePdfPage() {
                                 setDragActive(true);
                             }}
                             onDragLeave={() => setDragActive(false)}
-                            className={`border-2 border-dashed rounded-2xl p-12 text-center cursor-pointer transition-all ${dragActive
-                                    ? "border-[#22396F] bg-white/80 scale-[1.01]"
-                                    : "border-[#e5dcb8] bg-white/70 hover:border-[#22396F] hover:bg-white"
-                                }`}
                             onClick={() => document.getElementById("file-input")?.click()}
+                            className={`relative group cursor-pointer rounded-3xl p-10 text-center transition-all duration-300 overflow-hidden ${dragActive
+                                    ? "bg-white/90 scale-[1.02] shadow-2xl"
+                                    : "bg-white/70 hover:bg-white hover:shadow-xl"
+                                }`}
+                            style={{
+                                border: dragActive
+                                    ? "2px solid #d946ef"
+                                    : "2px dashed #e5dcb8",
+                                boxShadow: dragActive
+                                    ? "0 20px 60px rgba(217, 70, 239, 0.2), 0 0 0 4px rgba(217, 70, 239, 0.1)"
+                                    : undefined,
+                            }}
                         >
-                            <p className="text-lg font-medium mb-1 text-[#010736]">
-                                Drag & drop a PDF here
-                            </p>
-                            <p className="text-sm text-[#0D1C42]/60">or click to browse</p>
+                            <div
+                                className={`absolute inset-0 rounded-3xl bg-gradient-to-br from-fuchsia-500/5 via-transparent to-purple-500/5 transition-opacity ${dragActive
+                                        ? "opacity-100"
+                                        : "opacity-0 group-hover:opacity-100"
+                                    }`}
+                            />
+
+                            <div className="relative">
+                                <div
+                                    className={`inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-[#010736] to-[#22396f] shadow-lg mb-5 transition-transform duration-500 ${dragActive ? "scale-110 -translate-y-1" : "group-hover:scale-105"
+                                        }`}
+                                >
+                                    <Upload
+                                        className={`w-7 h-7 text-[#FCF1D0] ${dragActive ? "animate-bounce-subtle" : ""
+                                            }`}
+                                        strokeWidth={2.5}
+                                    />
+                                </div>
+                                <h3 className="text-xl font-bold text-[#010736] mb-2">
+                                    {dragActive ? "Drop your PDF here" : "Select a PDF file"}
+                                </h3>
+                                <p className="text-sm text-[#0D1C42]/60 mb-4">
+                                    Drag & drop or click to browse
+                                </p>
+                                <div className="inline-flex items-center gap-2 text-xs font-medium text-[#0D1C42]/50 bg-[#FCF1D0]/70 px-3 py-1.5 rounded-full border border-[#e5dcb8]">
+                                    <FileText className="w-3 h-3" />
+                                    <span>PDF only · max 50 MB</span>
+                                </div>
+                            </div>
+
                             <input
                                 id="file-input"
                                 type="file"
@@ -219,8 +266,11 @@ export default function OrganizePdfPage() {
 
                     {file && (
                         <>
-                            <div className="card p-4 flex items-center gap-3">
-                                <span className="text-2xl">📄</span>
+                            {/* File header */}
+                            <div className="card p-4 flex items-center gap-3 animate-fade-in">
+                                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-fuchsia-500 to-fuchsia-600 flex items-center justify-center shadow-sm shrink-0">
+                                    <FileText className="w-5 h-5 text-white" strokeWidth={2.5} />
+                                </div>
                                 <div className="flex-1 min-w-0">
                                     <p className="font-medium text-sm text-[#010736] truncate">
                                         {file.name}
@@ -235,16 +285,18 @@ export default function OrganizePdfPage() {
                                 </div>
                                 <button
                                     onClick={reset}
-                                    className="text-sm font-medium text-[#22396F] hover:underline"
+                                    className="text-xs font-medium text-[#22396F] hover:underline"
                                 >
                                     Change file
                                 </button>
                             </div>
 
                             {readingPdf && (
-                                <div className="mt-4 card p-8 text-center">
-                                    <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-[#22396F] border-t-transparent"></div>
-                                    <p className="text-sm text-[#0D1C42]/60 mt-3">
+                                <div className="mt-4 card p-12 text-center animate-fade-in">
+                                    <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-fuchsia-500 to-fuchsia-600 shadow-lg mb-4">
+                                        <Loader2 className="w-7 h-7 text-white animate-spin" />
+                                    </div>
+                                    <p className="text-sm text-[#0D1C42]/60">
                                         Reading PDF pages...
                                     </p>
                                 </div>
@@ -252,8 +304,9 @@ export default function OrganizePdfPage() {
 
                             {!readingPdf && totalPages !== null && (
                                 <>
-                                    <div className="mt-6 card p-5">
-                                        <div className="flex items-center justify-between mb-4">
+                                    {/* Page order panel */}
+                                    <div className="mt-6 card p-5 animate-fade-in">
+                                        <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
                                             <div>
                                                 <p className="text-sm font-semibold text-[#010736]">
                                                     Page order
@@ -276,10 +329,12 @@ export default function OrganizePdfPage() {
                                             </button>
                                         </div>
 
-                                        <p className="text-xs text-[#0D1C42]/50 mb-3">
-                                            Drag to reorder · click ✕ to delete · click ⧉ to
-                                            duplicate
-                                        </p>
+                                        <div className="flex items-center gap-2 mb-4 px-3 py-2 bg-[#FCF1D0]/60 border border-[#e5dcb8] rounded-xl">
+                                            <GripVertical className="w-3.5 h-3.5 text-[#0D1C42]/40 shrink-0" />
+                                            <p className="text-xs text-[#0D1C42]/60">
+                                                Drag cards to reorder · hover to delete or duplicate
+                                            </p>
+                                        </div>
 
                                         <div className="flex flex-wrap gap-2">
                                             {order.map((pageNum, idx) => (
@@ -290,8 +345,8 @@ export default function OrganizePdfPage() {
                                                     onDragOver={(e) => onDragOver(e, idx)}
                                                     onDragEnd={onDragEnd}
                                                     className={`group relative w-20 h-24 border-2 rounded-xl flex flex-col items-center justify-center cursor-grab active:cursor-grabbing transition select-none ${dragIndex === idx
-                                                            ? "border-[#22396F] bg-[#FCF1D0] opacity-50"
-                                                            : "border-[#e5dcb8] bg-white/70 hover:border-[#22396F]"
+                                                            ? "border-fuchsia-500 bg-fuchsia-50 opacity-40 scale-95"
+                                                            : "border-[#e5dcb8] bg-white/70 hover:border-fuchsia-400 hover:bg-white hover:shadow-md"
                                                         }`}
                                                 >
                                                     <div className="text-2xl font-bold text-[#010736]">
@@ -301,19 +356,22 @@ export default function OrganizePdfPage() {
                                                         pos {idx + 1}
                                                     </div>
 
+                                                    {/* Delete */}
                                                     <button
                                                         onClick={() => removePage(idx)}
-                                                        className="absolute top-1 right-1 w-5 h-5 flex items-center justify-center text-xs text-red-500 bg-white rounded-full border border-red-200 opacity-0 group-hover:opacity-100 transition shadow-sm"
+                                                        className="absolute top-1 right-1 w-5 h-5 flex items-center justify-center text-red-500 bg-white rounded-full border border-red-200 opacity-0 group-hover:opacity-100 transition shadow-sm hover:bg-red-500 hover:text-white"
                                                         title="Delete"
                                                     >
-                                                        ✕
+                                                        <X className="w-3 h-3" />
                                                     </button>
+
+                                                    {/* Duplicate */}
                                                     <button
                                                         onClick={() => duplicatePage(idx)}
-                                                        className="absolute top-1 left-1 w-5 h-5 flex items-center justify-center text-xs text-[#22396F] bg-white rounded-full border border-[#e5dcb8] opacity-0 group-hover:opacity-100 transition shadow-sm"
+                                                        className="absolute top-1 left-1 w-5 h-5 flex items-center justify-center text-fuchsia-500 bg-white rounded-full border border-fuchsia-200 opacity-0 group-hover:opacity-100 transition shadow-sm hover:bg-fuchsia-500 hover:text-white"
                                                         title="Duplicate"
                                                     >
-                                                        ⧉
+                                                        <Copy className="w-3 h-3" />
                                                     </button>
                                                 </div>
                                             ))}
@@ -328,80 +386,138 @@ export default function OrganizePdfPage() {
                                     </div>
 
                                     {error && (
-                                        <div className="mt-4 bg-red-50 border border-red-200 text-red-700 p-3 rounded-lg text-sm">
-                                            {error}
+                                        <div className="mt-4 bg-red-50 border border-red-200 text-red-700 p-3 rounded-xl text-sm flex items-start gap-2 animate-fade-in">
+                                            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                                            <span>{error}</span>
                                         </div>
                                     )}
 
                                     <button
                                         onClick={handleApply}
                                         disabled={order.length === 0 || loading}
-                                        className="btn-primary mt-6 w-full"
+                                        className="btn-primary mt-6 w-full flex items-center justify-center gap-2"
                                     >
-                                        {loading
-                                            ? "Uploading..."
-                                            : `Save reordered PDF (${order.length} page${order.length !== 1 ? "s" : ""
-                                            })`}
+                                        {loading ? (
+                                            <>
+                                                <Loader2 className="w-5 h-5 animate-spin" />
+                                                <span>Uploading...</span>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <LayoutGrid className="w-5 h-5" />
+                                                <span>
+                                                    Save reordered PDF ({order.length} page
+                                                    {order.length !== 1 ? "s" : ""})
+                                                </span>
+                                            </>
+                                        )}
                                     </button>
                                 </>
                             )}
 
                             {!readingPdf && error && !totalPages && (
-                                <div className="mt-4 bg-red-50 border border-red-200 text-red-700 p-3 rounded-lg text-sm">
-                                    {error}
+                                <div className="mt-4 bg-red-50 border border-red-200 text-red-700 p-3 rounded-xl text-sm flex items-start gap-2 animate-fade-in">
+                                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                                    <span>{error}</span>
                                 </div>
                             )}
                         </>
                     )}
 
                     {!file && error && (
-                        <div className="mt-4 bg-red-50 border border-red-200 text-red-700 p-3 rounded-lg text-sm">
-                            {error}
+                        <div className="mt-4 bg-red-50 border border-red-200 text-red-700 p-3 rounded-xl text-sm flex items-start gap-2 animate-fade-in">
+                            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                            <span>{error}</span>
                         </div>
                     )}
                 </>
             )}
 
+            {/* Processing */}
             {job && (job.status === "pending" || job.status === "processing") && (
-                <div className="card p-12 text-center animate-fade-in">
-                    <div className="inline-block animate-spin rounded-full h-12 w-12 border-4 border-[#22396F] border-t-transparent mb-4"></div>
-                    <h2 className="text-xl font-bold mb-2 text-[#010736]">
-                        {job.status === "pending" ? "Queued..." : "Reordering..."}
-                    </h2>
+                <div className="card p-12 text-center animate-fade-in relative overflow-hidden">
+                    <div className="absolute inset-0 bg-gradient-to-r from-fuchsia-500/5 via-transparent to-fuchsia-500/5 animate-pulse-soft" />
+
+                    <div className="relative">
+                        <div className="inline-flex items-center justify-center w-20 h-20 rounded-3xl bg-gradient-to-br from-fuchsia-500 to-fuchsia-600 shadow-xl mb-5">
+                            <Loader2 className="w-8 h-8 text-white animate-spin" />
+                        </div>
+
+                        <h2 className="text-2xl font-bold text-[#010736] mb-2">
+                            {job.status === "pending" ? "Queued..." : "Reordering pages"}
+                        </h2>
+                        <p className="text-[#0D1C42]/60 mb-6">
+                            This usually takes a few seconds
+                        </p>
+
+                        <div className="max-w-xs mx-auto">
+                            <div className="h-1.5 bg-[#FCF1D0] rounded-full overflow-hidden border border-[#e5dcb8]">
+                                <div className="h-full w-1/3 bg-gradient-to-r from-fuchsia-500 to-fuchsia-600 rounded-full animate-progress" />
+                            </div>
+                        </div>
+                    </div>
                 </div>
             )}
 
+            {/* Completed */}
             {job && job.status === "completed" && job.download_url && (
-                <div className="card p-8 text-center animate-scale-in">
-                    <div className="text-5xl mb-4">📑</div>
-                    <h2 className="text-xl font-bold mb-2 text-[#010736]">
-                        Reordering complete
-                    </h2>
-                    <p className="text-[#0D1C42]/60 mb-6">
-                        Your reorganized PDF is ready to download.
-                    </p>
-                    <a
-                        href={job.download_url}
-                        className="inline-flex items-center gap-2 bg-gradient-to-br from-emerald-500 to-emerald-600 hover:brightness-110 text-white font-semibold py-3 px-8 rounded-xl transition-all shadow-sm hover:shadow-md"
-                    >
-                        Download PDF
-                    </a>
-                    <button
-                        onClick={reset}
-                        className="block mx-auto mt-4 text-sm font-medium text-[#22396F] hover:underline"
-                    >
-                        Organize another PDF
-                    </button>
+                <div className="card p-10 text-center animate-scale-in relative overflow-hidden">
+                    <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/5 via-transparent to-emerald-500/5" />
+
+                    <div className="relative">
+                        <div className="inline-flex items-center justify-center w-20 h-20 rounded-3xl bg-gradient-to-br from-emerald-500 to-emerald-600 shadow-xl mb-5 animate-scale-in">
+                            <CheckCircle2 className="w-9 h-9 text-white" strokeWidth={2.5} />
+                        </div>
+
+                        <h2 className="text-2xl font-bold text-[#010736] mb-2">
+                            Reordering complete
+                        </h2>
+                        <p className="text-[#0D1C42]/60 mb-8">
+                            Your reorganized PDF is ready
+                        </p>
+
+                        <a
+                            href={job.download_url}
+                            className="inline-flex items-center gap-2 bg-gradient-to-br from-emerald-500 to-emerald-600 hover:brightness-110 hover:-translate-y-0.5 text-white font-semibold py-3.5 px-8 rounded-xl transition-all shadow-md hover:shadow-xl"
+                        >
+                            <Download className="w-5 h-5" />
+                            <span>Download reorganized PDF</span>
+                        </a>
+
+                        <button
+                            onClick={reset}
+                            className="mt-6 inline-flex items-center gap-1.5 text-sm font-medium text-[#22396F] hover:underline"
+                        >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            <span>Organize another PDF</span>
+                        </button>
+                    </div>
                 </div>
             )}
 
+            {/* Failed */}
             {job && job.status === "failed" && (
-                <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl">
-                    <p className="font-bold mb-1">Organize failed</p>
-                    <p className="text-sm">{job.error_message}</p>
-                    <button onClick={reset} className="mt-3 text-sm font-medium underline">
-                        Try again
-                    </button>
+                <div className="card p-8 animate-fade-in border-red-200">
+                    <div className="flex items-start gap-4">
+                        <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-red-500 to-red-600 flex items-center justify-center shrink-0 shadow-md">
+                            <AlertCircle className="w-6 h-6 text-white" strokeWidth={2.5} />
+                        </div>
+                        <div className="flex-1">
+                            <h3 className="font-bold text-[#010736] mb-1">
+                                Organize failed
+                            </h3>
+                            <p className="text-sm text-[#0D1C42]/70 mb-4">
+                                {job.error_message || "Something went wrong."}
+                            </p>
+                            <button
+                                onClick={reset}
+                                className="inline-flex items-center gap-1.5 text-sm font-medium text-[#22396F] hover:underline"
+                            >
+                                <RotateCcw className="w-3.5 h-3.5" />
+                                <span>Try again</span>
+                            </button>
+                        </div>
+                    </div>
                 </div>
             )}
         </ToolLayout>

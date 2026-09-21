@@ -1,6 +1,19 @@
 "use client";
 
 import { useState, ChangeEvent, DragEvent, useRef } from "react";
+import {
+    FileStack,
+    Upload,
+    X,
+    ArrowUp,
+    ArrowDown,
+    CheckCircle2,
+    Loader2,
+    AlertCircle,
+    Download,
+    RotateCcw,
+    FileText,
+} from "lucide-react";
 import { apiUpload, apiFetch } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import ToolLayout from "@/components/ToolLayout";
@@ -28,6 +41,10 @@ export default function MergePdfPage() {
         const pdfs = Array.from(newFiles).filter((f) =>
             f.name.toLowerCase().endsWith(".pdf")
         );
+        if (pdfs.length === 0) {
+            setError("Please upload PDF files.");
+            return;
+        }
         setFiles((prev) => [...prev, ...pdfs]);
         setJob(null);
         setError(null);
@@ -117,16 +134,25 @@ export default function MergePdfPage() {
         setLoading(false);
     }
 
+    const totalSize = files.reduce((acc, f) => acc + f.size, 0);
+
+    function formatBytes(bytes: number): string {
+        if (bytes < 1024) return `${bytes} B`;
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+        return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+    }
+
     return (
         <ToolLayout
-            icon="🔗"
+            icon={FileStack}
             title="Merge PDF"
-            description="Combine PDFs in the order you want. Upload at least 2 files."
+            description="Combine multiple PDFs into one document — in the exact order you want."
             color="from-blue-500 to-blue-600"
         >
-            {/* Upload UI — shown only before job starts */}
+            {/* ============ UPLOAD STATE ============ */}
             {!job && (
                 <>
+                    {/* Dropzone */}
                     <div
                         onDrop={handleDrop}
                         onDragOver={(e) => {
@@ -134,16 +160,52 @@ export default function MergePdfPage() {
                             setDragActive(true);
                         }}
                         onDragLeave={() => setDragActive(false)}
-                        className={`border-2 border-dashed rounded-2xl p-12 text-center cursor-pointer transition-all ${dragActive
-                                ? "border-[#22396F] bg-white/80 scale-[1.01]"
-                                : "border-[#e5dcb8] bg-white/70 hover:border-[#22396F] hover:bg-white"
-                            }`}
                         onClick={() => document.getElementById("file-input")?.click()}
+                        className={`relative group cursor-pointer rounded-3xl p-10 text-center transition-all duration-300 overflow-hidden ${dragActive
+                                ? "bg-white/90 scale-[1.02] shadow-2xl"
+                                : "bg-white/70 hover:bg-white hover:shadow-xl"
+                            }`}
+                        style={{
+                            border: dragActive
+                                ? "2px solid #4f7cff"
+                                : "2px dashed #e5dcb8",
+                            boxShadow: dragActive
+                                ? "0 20px 60px rgba(79, 124, 255, 0.2), 0 0 0 4px rgba(79, 124, 255, 0.1)"
+                                : undefined,
+                        }}
                     >
-                        <p className="text-lg font-medium mb-1 text-[#010736]">
-                            Drag & drop PDF files here
-                        </p>
-                        <p className="text-sm text-[#0D1C42]/60">or click to browse</p>
+                        {/* Glow behind dropzone */}
+                        <div
+                            className={`absolute inset-0 rounded-3xl bg-gradient-to-br from-[#4f7cff]/5 via-transparent to-[#8b5cf6]/5 transition-opacity ${dragActive ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+                                }`}
+                        />
+
+                        <div className="relative">
+                            {/* Floating upload icon */}
+                            <div
+                                className={`inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-[#010736] to-[#22396f] shadow-lg mb-5 transition-transform duration-500 ${dragActive ? "scale-110 -translate-y-1" : "group-hover:scale-105"
+                                    }`}
+                            >
+                                <Upload
+                                    className={`w-7 h-7 text-[#FCF1D0] transition-transform ${dragActive ? "animate-bounce-subtle" : ""
+                                        }`}
+                                    strokeWidth={2.5}
+                                />
+                            </div>
+
+                            <h3 className="text-xl font-bold text-[#010736] mb-2">
+                                {dragActive ? "Drop your PDFs here" : "Select PDF files"}
+                            </h3>
+                            <p className="text-sm text-[#0D1C42]/60 mb-4">
+                                Drag & drop or click to browse · at least 2 files
+                            </p>
+
+                            <div className="inline-flex items-center gap-2 text-xs font-medium text-[#0D1C42]/50 bg-[#FCF1D0]/70 px-3 py-1.5 rounded-full border border-[#e5dcb8]">
+                                <FileText className="w-3 h-3" />
+                                <span>PDF only · max 50 MB each</span>
+                            </div>
+                        </div>
+
                         <input
                             id="file-input"
                             type="file"
@@ -154,118 +216,204 @@ export default function MergePdfPage() {
                         />
                     </div>
 
+                    {/* File list */}
                     {files.length > 0 && (
-                        <div className="mt-6 card p-4">
-                            <p className="text-sm font-medium text-[#010736] mb-3">
-                                {files.length} file{files.length !== 1 ? "s" : ""} selected
-                            </p>
-                            <ul className="space-y-2">
+                        <div className="mt-6 animate-fade-in">
+                            <div className="flex items-center justify-between mb-3">
+                                <div className="flex items-center gap-2">
+                                    <h3 className="font-semibold text-[#010736]">
+                                        {files.length} file{files.length !== 1 ? "s" : ""}
+                                    </h3>
+                                    <span className="text-xs text-[#0D1C42]/50 bg-white/70 px-2 py-0.5 rounded-full border border-[#e5dcb8]">
+                                        {formatBytes(totalSize)}
+                                    </span>
+                                </div>
+                                <button
+                                    onClick={() => setFiles([])}
+                                    className="text-xs font-medium text-red-600 hover:text-red-700 hover:underline"
+                                >
+                                    Clear all
+                                </button>
+                            </div>
+
+                            <div className="space-y-2">
                                 {files.map((f, i) => (
-                                    <li
+                                    <div
                                         key={`${f.name}-${i}`}
-                                        className="flex items-center gap-2 text-sm bg-[#FCF1D0]/60 p-2.5 rounded-lg border border-[#e5dcb8]"
+                                        className="group bg-white/80 backdrop-blur-sm border border-[#e5dcb8] hover:border-[#22396F] rounded-2xl p-3 flex items-center gap-3 transition-all hover:shadow-md animate-fade-in"
                                     >
-                                        <span className="text-lg">📄</span>
-                                        <span className="flex-1 truncate text-[#010736]">
-                                            {f.name}
-                                        </span>
-                                        <button
-                                            onClick={() => moveFile(i, -1)}
-                                            disabled={i === 0}
-                                            className="w-7 h-7 flex items-center justify-center text-[#0D1C42] hover:text-[#22396F] hover:bg-white rounded-md transition disabled:opacity-20"
-                                        >
-                                            ↑
-                                        </button>
-                                        <button
-                                            onClick={() => moveFile(i, 1)}
-                                            disabled={i === files.length - 1}
-                                            className="w-7 h-7 flex items-center justify-center text-[#0D1C42] hover:text-[#22396F] hover:bg-white rounded-md transition disabled:opacity-20"
-                                        >
-                                            ↓
-                                        </button>
+                                        {/* Index badge */}
+                                        <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center text-white text-xs font-bold shadow-sm shrink-0">
+                                            {i + 1}
+                                        </div>
+
+                                        {/* File info */}
+                                        <div className="flex-1 min-w-0">
+                                            <p className="text-sm font-medium text-[#010736] truncate">
+                                                {f.name}
+                                            </p>
+                                            <p className="text-xs text-[#0D1C42]/50">
+                                                {formatBytes(f.size)}
+                                            </p>
+                                        </div>
+
+                                        {/* Reorder buttons */}
+                                        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                                            <button
+                                                onClick={() => moveFile(i, -1)}
+                                                disabled={i === 0}
+                                                className="w-7 h-7 flex items-center justify-center rounded-lg text-[#0D1C42] hover:bg-[#FCF1D0] disabled:opacity-20 transition"
+                                                title="Move up"
+                                            >
+                                                <ArrowUp className="w-3.5 h-3.5" />
+                                            </button>
+                                            <button
+                                                onClick={() => moveFile(i, 1)}
+                                                disabled={i === files.length - 1}
+                                                className="w-7 h-7 flex items-center justify-center rounded-lg text-[#0D1C42] hover:bg-[#FCF1D0] disabled:opacity-20 transition"
+                                                title="Move down"
+                                            >
+                                                <ArrowDown className="w-3.5 h-3.5" />
+                                            </button>
+                                        </div>
+
+                                        {/* Remove */}
                                         <button
                                             onClick={() => removeFile(i)}
-                                            className="w-7 h-7 flex items-center justify-center text-red-500 hover:text-red-700 hover:bg-white rounded-md transition"
+                                            className="w-7 h-7 flex items-center justify-center rounded-lg text-red-500 hover:bg-red-50 transition"
+                                            title="Remove"
                                         >
-                                            ✕
+                                            <X className="w-4 h-4" />
                                         </button>
-                                    </li>
+                                    </div>
                                 ))}
-                            </ul>
+                            </div>
                         </div>
                     )}
 
+                    {/* Error */}
                     {error && (
-                        <div className="mt-4 bg-red-50 border border-red-200 text-red-700 p-3 rounded-lg text-sm">
-                            {error}
+                        <div className="mt-4 bg-red-50 border border-red-200 text-red-700 p-3 rounded-xl text-sm flex items-start gap-2 animate-fade-in">
+                            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                            <span>{error}</span>
                         </div>
                     )}
 
+                    {/* Submit */}
                     <button
                         onClick={handleMerge}
                         disabled={files.length < 2 || loading}
-                        className="btn-primary mt-6 w-full"
+                        className="btn-primary mt-6 w-full flex items-center justify-center gap-2 group"
                     >
-                        {loading ? "Uploading..." : `Merge ${files.length} PDFs`}
+                        {loading ? (
+                            <>
+                                <Loader2 className="w-5 h-5 animate-spin" />
+                                <span>Uploading...</span>
+                            </>
+                        ) : (
+                            <>
+                                <FileStack className="w-5 h-5" />
+                                <span>
+                                    Merge {files.length || ""}{" "}
+                                    {files.length === 1 ? "PDF" : "PDFs"}
+                                </span>
+                            </>
+                        )}
                     </button>
                 </>
             )}
 
-            {/* Processing state */}
+            {/* ============ PROCESSING STATE ============ */}
             {job && (job.status === "pending" || job.status === "processing") && (
-                <div className="card p-12 text-center animate-fade-in">
-                    <div className="inline-block animate-spin rounded-full h-12 w-12 border-4 border-[#22396F] border-t-transparent mb-4"></div>
-                    <h2 className="text-xl font-bold mb-2 text-[#010736]">
-                        {job.status === "pending" ? "Queued..." : "Merging..."}
-                    </h2>
-                    <p className="text-[#0D1C42]/60">
-                        Please wait. This usually takes a few seconds.
-                    </p>
+                <div className="card p-12 text-center animate-fade-in relative overflow-hidden">
+                    {/* Animated background */}
+                    <div className="absolute inset-0 bg-gradient-to-r from-[#4f7cff]/5 via-[#8b5cf6]/5 to-[#4f7cff]/5 animate-pulse-soft" />
+
+                    <div className="relative">
+                        <div className="inline-flex items-center justify-center w-20 h-20 rounded-3xl bg-gradient-to-br from-blue-500 to-blue-600 shadow-xl mb-5">
+                            <Loader2 className="w-8 h-8 text-white animate-spin" />
+                        </div>
+
+                        <h2 className="text-2xl font-bold text-[#010736] mb-2">
+                            {job.status === "pending" ? "Queued..." : "Merging your PDFs"}
+                        </h2>
+                        <p className="text-[#0D1C42]/60 mb-6">
+                            This usually takes a few seconds
+                        </p>
+
+                        {/* Progress bar (indeterminate) */}
+                        <div className="max-w-xs mx-auto">
+                            <div className="h-1.5 bg-[#FCF1D0] rounded-full overflow-hidden border border-[#e5dcb8]">
+                                <div className="h-full w-1/3 bg-gradient-to-r from-[#0D1C42] to-[#22396F] rounded-full animate-progress" />
+                            </div>
+                        </div>
+                    </div>
                 </div>
             )}
 
-            {/* Completed */}
+            {/* ============ COMPLETED STATE ============ */}
             {job && job.status === "completed" && job.download_url && (
-                <div className="card p-8 text-center animate-scale-in">
-                    <div className="text-5xl mb-4">✅</div>
-                    <h2 className="text-xl font-bold mb-2 text-[#010736]">
-                        Merge complete
-                    </h2>
-                    <p className="text-[#0D1C42]/60 mb-6">
-                        Your merged PDF is ready to download.
-                    </p>
-                    <a
-                        href={job.download_url}
-                        className="inline-flex items-center gap-2 bg-gradient-to-br from-emerald-500 to-emerald-600 hover:brightness-110 text-white font-semibold py-3 px-8 rounded-xl transition-all shadow-sm hover:shadow-md"
-                    >
-                        Download merged PDF
-                    </a>
-                    <button
-                        onClick={reset}
-                        className="block mx-auto mt-4 text-sm font-medium text-[#22396F] hover:underline"
-                    >
-                        Merge more files
-                    </button>
+                <div className="card p-10 text-center animate-scale-in relative overflow-hidden">
+                    {/* Success glow */}
+                    <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/5 via-transparent to-emerald-500/5" />
+
+                    <div className="relative">
+                        {/* Animated checkmark */}
+                        <div className="inline-flex items-center justify-center w-20 h-20 rounded-3xl bg-gradient-to-br from-emerald-500 to-emerald-600 shadow-xl mb-5 animate-scale-in">
+                            <CheckCircle2 className="w-9 h-9 text-white" strokeWidth={2.5} />
+                        </div>
+
+                        <h2 className="text-2xl font-bold text-[#010736] mb-2">
+                            Merge complete
+                        </h2>
+                        <p className="text-[#0D1C42]/60 mb-8">
+                            {files.length} PDFs combined into one document
+                        </p>
+
+                        {/* Download button */}
+                        <a
+                            href={job.download_url}
+                            className="inline-flex items-center gap-2 bg-gradient-to-br from-emerald-500 to-emerald-600 hover:brightness-110 hover:-translate-y-0.5 text-white font-semibold py-3.5 px-8 rounded-xl transition-all shadow-md hover:shadow-xl"
+                        >
+                            <Download className="w-5 h-5" />
+                            <span>Download merged PDF</span>
+                        </a>
+
+                        {/* Restart */}
+                        <button
+                            onClick={reset}
+                            className="mt-6 inline-flex items-center gap-1.5 text-sm font-medium text-[#22396F] hover:underline"
+                        >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            <span>Merge more files</span>
+                        </button>
+                    </div>
                 </div>
             )}
 
-            {/* Failed */}
+            {/* ============ FAILED STATE ============ */}
             {job && job.status === "failed" && (
-                <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl">
-                    <p className="font-bold mb-1">Merge failed</p>
-                    <p className="text-sm">{job.error_message}</p>
-                    <button
-                        onClick={reset}
-                        className="mt-3 text-sm font-medium underline"
-                    >
-                        Try again
-                    </button>
-                </div>
-            )}
-
-            {error && job && (
-                <div className="mt-4 bg-red-50 border border-red-200 text-red-700 p-3 rounded-lg text-sm">
-                    {error}
+                <div className="card p-8 animate-fade-in border-red-200">
+                    <div className="flex items-start gap-4">
+                        <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-red-500 to-red-600 flex items-center justify-center shrink-0 shadow-md">
+                            <AlertCircle className="w-6 h-6 text-white" strokeWidth={2.5} />
+                        </div>
+                        <div className="flex-1">
+                            <h3 className="font-bold text-[#010736] mb-1">
+                                Merge failed
+                            </h3>
+                            <p className="text-sm text-[#0D1C42]/70 mb-4">
+                                {job.error_message || "Something went wrong."}
+                            </p>
+                            <button
+                                onClick={reset}
+                                className="inline-flex items-center gap-1.5 text-sm font-medium text-[#22396F] hover:underline"
+                            >
+                                <RotateCcw className="w-3.5 h-3.5" />
+                                <span>Try again</span>
+                            </button>
+                        </div>
+                    </div>
                 </div>
             )}
         </ToolLayout>
