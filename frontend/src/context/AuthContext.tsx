@@ -68,7 +68,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     useEffect(() => {
-        refreshUser().then(() => refreshUsage());
+        let cancelled = false;
+        (async () => {
+            await refreshUser();
+            if (cancelled) return;
+            await refreshUsage();
+        })();
+        return () => {
+            cancelled = true;
+        };
     }, []);
 
     async function login(email: string, password: string) {
@@ -94,7 +102,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     async function logout() {
-        await apiFetch("/auth/logout/", { method: "POST" });
+        try {
+            await apiFetch("/auth/logout/", { method: "POST" });
+        } catch {
+            // ignore
+        }
         setUser(null);
         await refreshUsage();
     }

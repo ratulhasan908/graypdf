@@ -10,48 +10,70 @@ export class ApiError extends Error {
     }
 }
 
-/**
- * Try to refresh the access token using the refresh cookie.
- * Returns true if a new access_token was set.
- */
-async function tryRefresh(): Promise<boolean> {
-    try {
-        const res = await fetch(`${API_BASE_URL}/auth/refresh/`, {
-            method: "POST",
-            credentials: "include",
-        });
-        return res.ok;
-    } catch {
-        return false;
-    }
-}
+// Single-flight lock: only one refresh in-flight at a time
+let refreshPromise: Promise<boolean> | null = null;
+const REQUEST_TIMEOUT_MS = 15000;
 
-/**
- * A fetch wrapper that:
- *  1. Includes credentials (cookies)
- *  2. On 401, tries to refresh the access token once
- *  3. Retries the original request if refresh succeeded
- *
- * Skips refresh for auth endpoints to avoid infinite loops.
- */
-async function doFetch(
+async function fetchWithTimeout(
     url: string,
     options: RequestInit
 ): Promise<Response> {
-    let res = await fetch(url, options);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
-    const isAuthEndpoint =
+    try {
+        return await fetch(url, { ...options, signal: controller.signal });
+    } finally {
+        clearTimeout(timeout);
+    }
+}
+
+async function tryRefresh(): Promise<boolean> {
+    if (refreshPromise) return refreshPromise;
+
+    refreshPromise = (async () => {
+        try {
+            const res = await fetch(`${API_BASE_URL}/auth/refresh/`, {
+                method: "POST",
+                credentials: "include",
+            });
+            return res.ok;
+        } catch {
+            return false;
+        } finally {
+            // Release the lock after a short delay so parallel requests
+            // don't all trigger refresh at once
+            setTimeout(() => {
+                refreshPromise = null;
+            }, 500);
+        }
+    })();
+
+    return refreshPromise;
+}
+
+/**
+ * List of endpoints that should NEVER trigger a refresh.
+ * These are either auth endpoints or /me (which is the whole point
+ * of checking whether we're logged in).
+ */
+function isNoRefreshEndpoint(url: string): boolean {
+    return (
         url.includes("/auth/login/") ||
         url.includes("/auth/register/") ||
         url.includes("/auth/refresh/") ||
-        url.includes("/auth/logout/");
+        url.includes("/auth/logout/") ||
+        url.includes("/auth/me/")
+    );
+}
 
-    // Only try refresh if we got 401 and it's NOT an auth endpoint
-    if (res.status === 401 && !isAuthEndpoint) {
+async function doFetch(url: string, options: RequestInit): Promise<Response> {
+    let res = await fetchWithTimeout(url, options);
+
+    if (res.status === 401 && !isNoRefreshEndpoint(url)) {
         const refreshed = await tryRefresh();
         if (refreshed) {
-            // Retry the original request with the new cookie
-            res = await fetch(url, options);
+            res = await fetchWithTimeout(url, options);
         }
     }
 
@@ -90,16 +112,11 @@ export async function apiUpload<T>(
     formData: FormData
 ): Promise<T> {
     const url = `${API_BASE_URL}${endpoint}`;
-
-    // For FormData, DO NOT set Content-Type — the browser sets it with the
-    // multipart boundary automatically.
-    const options: RequestInit = {
+    const res = await doFetch(url, {
         method: "POST",
         credentials: "include",
         body: formData,
-    };
-
-    const res = await doFetch(url, options);
+    });
 
     if (!res.ok) {
         let detail = `HTTP ${res.status}`;

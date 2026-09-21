@@ -88,8 +88,15 @@ export default function RotatePdfPage() {
 
     function startPolling(jobId: string) {
         stopPolling();
+        const startedAt = Date.now();
         pollRef.current = setInterval(async () => {
             try {
+                if (Date.now() - startedAt > 120000) {
+                    stopPolling();
+                    setLoading(false);
+                    setError("The PDF worker is taking too long to respond. Please try again.");
+                    return;
+                }
                 const updated = await apiFetch<Job>(`/jobs/${jobId}/status/`);
                 setJob(updated);
                 if (updated.status === "completed" || updated.status === "failed") {
@@ -175,8 +182,8 @@ export default function RotatePdfPage() {
                         onDragLeave={() => setDragActive(false)}
                         onClick={() => document.getElementById("file-input")?.click()}
                         className={`relative group cursor-pointer rounded-3xl p-10 text-center transition-all duration-300 overflow-hidden ${dragActive
-                                ? "bg-white/90 scale-[1.02] shadow-2xl"
-                                : "bg-white/70 hover:bg-white hover:shadow-xl"
+                            ? "bg-white/90 scale-[1.02] shadow-2xl"
+                            : "bg-white/70 hover:bg-white hover:shadow-xl"
                             }`}
                         style={{
                             border: dragActive ? "2px solid #06b6d4" : "2px dashed #e5dcb8",
@@ -256,14 +263,14 @@ export default function RotatePdfPage() {
                                             type="button"
                                             onClick={() => setAngle(a.id)}
                                             className={`group/btn p-4 rounded-2xl border-2 text-center transition-all ${active
-                                                    ? "border-cyan-500 bg-cyan-50/70 shadow-sm"
-                                                    : "border-[#e5dcb8] bg-white/70 hover:border-cyan-300 hover:bg-white"
+                                                ? "border-cyan-500 bg-cyan-50/70 shadow-sm"
+                                                : "border-[#e5dcb8] bg-white/70 hover:border-cyan-300 hover:bg-white"
                                                 }`}
                                         >
                                             <div
                                                 className={`inline-flex items-center justify-center w-12 h-12 rounded-xl mb-3 transition-all ${active
-                                                        ? "bg-gradient-to-br from-cyan-500 to-cyan-600 shadow-md"
-                                                        : "bg-[#FCF1D0] group-hover/btn:bg-white"
+                                                    ? "bg-gradient-to-br from-cyan-500 to-cyan-600 shadow-md"
+                                                    : "bg-[#FCF1D0] group-hover/btn:bg-white"
                                                     }`}
                                             >
                                                 <Icon
@@ -301,8 +308,8 @@ export default function RotatePdfPage() {
                                     type="button"
                                     onClick={() => setPageMode("all")}
                                     className={`py-3 rounded-xl font-medium text-sm transition-all ${pageMode === "all"
-                                            ? "bg-gradient-to-br from-cyan-500 to-cyan-600 text-white shadow-md"
-                                            : "text-[#0D1C42]/70 hover:bg-white"
+                                        ? "bg-gradient-to-br from-cyan-500 to-cyan-600 text-white shadow-md"
+                                        : "text-[#0D1C42]/70 hover:bg-white"
                                         }`}
                                 >
                                     All pages
@@ -311,8 +318,8 @@ export default function RotatePdfPage() {
                                     type="button"
                                     onClick={() => setPageMode("specific")}
                                     className={`py-3 rounded-xl font-medium text-sm transition-all ${pageMode === "specific"
-                                            ? "bg-gradient-to-br from-cyan-500 to-cyan-600 text-white shadow-md"
-                                            : "text-[#0D1C42]/70 hover:bg-white"
+                                        ? "bg-gradient-to-br from-cyan-500 to-cyan-600 text-white shadow-md"
+                                        : "text-[#0D1C42]/70 hover:bg-white"
                                         }`}
                                 >
                                     Specific pages

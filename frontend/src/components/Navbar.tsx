@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
+import { useEffect, useState } from "react";
 
 function getInitials(name: string): string {
     const parts = name.trim().split(/[\s._-]+/);
@@ -13,6 +14,11 @@ function getInitials(name: string): string {
 export default function Navbar() {
     const { user, usage, loading, logout } = useAuth();
     const router = useRouter();
+    const [mounted, setMounted] = useState(false);
+
+    useEffect(() => {
+        setMounted(true);
+    }, []);
 
     async function handleLogout() {
         await logout();
@@ -41,69 +47,85 @@ export default function Navbar() {
 
                 {/* Right side */}
                 <div className="flex items-center gap-2 sm:gap-3">
-                    {/* Usage badge */}
-                    {usage && (
-                        <Link
-                            href={user ? "/dashboard" : "/register"}
-                            className={`hidden sm:inline-flex text-xs px-3 py-1.5 rounded-full font-medium transition-all border ${usage.remaining === 0
-                                    ? "bg-red-50 text-red-700 border-red-200 hover:bg-red-100"
-                                    : usage.remaining <= 2
-                                        ? "bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100"
-                                        : "bg-white/70 text-[#0D1C42] border-[#e5dcb8] hover:bg-white"
-                                }`}
-                            title={
-                                usage.is_guest
-                                    ? "Sign up for 20 files/day"
-                                    : "Your daily usage"
-                            }
-                        >
-                            {usage.used}/{usage.limit} today
-                        </Link>
+                    {/*
+            Render NOTHING server-side and during the initial client render.
+            Only after `mounted` is true (after hydration) do we render
+            anything that depends on `user`, `usage`, or `loading`.
+            This prevents "server HTML != client HTML" hydration mismatches.
+          */}
+                    {mounted && (
+                        <>
+                            {/* Usage badge */}
+                            {usage && (
+                                <Link
+                                    href={user ? "/dashboard" : "/register"}
+                                    className={`hidden sm:inline-flex text-xs px-3 py-1.5 rounded-full font-medium transition-all border ${usage.remaining === 0
+                                            ? "bg-red-50 text-red-700 border-red-200 hover:bg-red-100"
+                                            : usage.remaining <= 2
+                                                ? "bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100"
+                                                : "bg-white/70 text-[#0D1C42] border-[#e5dcb8] hover:bg-white"
+                                        }`}
+                                    title={
+                                        usage.is_guest
+                                            ? "Sign up for 20 files/day"
+                                            : "Your daily usage"
+                                    }
+                                >
+                                    {usage.used}/{usage.limit} today
+                                </Link>
+                            )}
+
+                            {loading ? (
+                                <div className="w-20 h-8 skeleton rounded-lg" />
+                            ) : user ? (
+                                <>
+                                    <Link
+                                        href="/dashboard"
+                                        className="hidden sm:inline-block text-sm font-medium text-[#0D1C42] hover:text-[#22396F] transition-colors px-3 py-2"
+                                    >
+                                        Dashboard
+                                    </Link>
+
+                                    <div className="flex items-center gap-2 pl-1 pr-3 py-1 rounded-full bg-white/70 border border-[#e5dcb8]">
+                                        <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[#22396F] to-[#0D1C42] flex items-center justify-center text-[#FCF1D0] text-xs font-bold">
+                                            {getInitials(user.username)}
+                                        </div>
+                                        <span className="text-sm font-medium text-[#010736] hidden sm:inline max-w-[120px] truncate">
+                                            {user.username}
+                                        </span>
+                                    </div>
+
+                                    <button
+                                        onClick={handleLogout}
+                                        className="text-sm font-medium text-[#0D1C42] hover:text-red-600 transition-colors px-2"
+                                    >
+                                        Log out
+                                    </button>
+                                </>
+                            ) : (
+                                <>
+                                    <Link
+                                        href="/login"
+                                        className="text-sm font-medium text-[#0D1C42] hover:text-[#22396F] transition-colors px-3 py-2"
+                                    >
+                                        Log in
+                                    </Link>
+                                    <Link
+                                        href="/register"
+                                        className="relative text-sm font-semibold bg-gradient-to-br from-[#010736] to-[#22396f] hover:brightness-110 text-[#FCF1D0] px-4 py-2 rounded-lg transition-all shadow-md hover:shadow-lg hover:-translate-y-0.5"
+                                    >
+                                        Sign up free
+                                    </Link>
+                                </>
+                            )}
+                        </>
                     )}
 
-                    {loading ? (
-                        <div className="w-20 h-8 skeleton rounded-lg" />
-                    ) : user ? (
-                        <>
-                            <Link
-                                href="/dashboard"
-                                className="hidden sm:inline-block text-sm font-medium text-[#0D1C42] hover:text-[#22396F] transition-colors px-3 py-2"
-                            >
-                                Dashboard
-                            </Link>
-
-                            <div className="flex items-center gap-2 pl-1 pr-3 py-1 rounded-full bg-white/70 border border-[#e5dcb8]">
-                                <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[#22396F] to-[#0D1C42] flex items-center justify-center text-[#FCF1D0] text-xs font-bold">
-                                    {getInitials(user.username)}
-                                </div>
-                                <span className="text-sm font-medium text-[#010736] hidden sm:inline max-w-[120px] truncate">
-                                    {user.username}
-                                </span>
-                            </div>
-
-                            <button
-                                onClick={handleLogout}
-                                className="text-sm font-medium text-[#0D1C42] hover:text-red-600 transition-colors px-2"
-                            >
-                                Log out
-                            </button>
-                        </>
-                    ) : (
-                        <>
-                            <Link
-                                href="/login"
-                                className="text-sm font-medium text-[#0D1C42] hover:text-[#22396F] transition-colors px-3 py-2"
-                            >
-                                Log in
-                            </Link>
-                            <Link
-                                href="/register"
-                                className="relative text-sm font-semibold bg-gradient-to-br from-[#010736] to-[#22396f] hover:brightness-110 text-[#FCF1D0] px-4 py-2 rounded-lg transition-all shadow-md hover:shadow-lg hover:-translate-y-0.5"
-                            >
-                                Sign up free
-                            </Link>
-                        </>
-                    )}
+                    {/*
+            During SSR and the first client render, render an invisible
+            placeholder so the layout doesn't collapse.
+          */}
+                    {!mounted && <div className="w-20 h-8" />}
                 </div>
             </div>
         </nav>

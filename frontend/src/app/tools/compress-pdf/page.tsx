@@ -103,8 +103,15 @@ export default function CompressPdfPage() {
 
     function startPolling(jobId: string) {
         stopPolling();
+        const startedAt = Date.now();
         pollRef.current = setInterval(async () => {
             try {
+                if (Date.now() - startedAt > 120000) {
+                    stopPolling();
+                    setLoading(false);
+                    setError("The PDF worker is taking too long to respond. Please try again.");
+                    return;
+                }
                 const updated = await apiFetch<Job>(`/jobs/${jobId}/status/`);
                 setJob(updated);
                 if (updated.status === "completed" || updated.status === "failed") {
@@ -186,8 +193,8 @@ export default function CompressPdfPage() {
                         onDragLeave={() => setDragActive(false)}
                         onClick={() => document.getElementById("file-input")?.click()}
                         className={`relative group cursor-pointer rounded-3xl p-10 text-center transition-all duration-300 overflow-hidden ${dragActive
-                                ? "bg-white/90 scale-[1.02] shadow-2xl"
-                                : "bg-white/70 hover:bg-white hover:shadow-xl"
+                            ? "bg-white/90 scale-[1.02] shadow-2xl"
+                            : "bg-white/70 hover:bg-white hover:shadow-xl"
                             }`}
                         style={{
                             border: dragActive ? "2px solid #10b981" : "2px dashed #e5dcb8",
@@ -266,15 +273,15 @@ export default function CompressPdfPage() {
                                             type="button"
                                             onClick={() => setQuality(q.id)}
                                             className={`w-full text-left p-4 rounded-2xl border-2 transition-all flex items-center gap-3 ${active
-                                                    ? "border-emerald-500 bg-emerald-50/70 shadow-sm"
-                                                    : "border-[#e5dcb8] bg-white/70 hover:border-emerald-300 hover:bg-white"
+                                                ? "border-emerald-500 bg-emerald-50/70 shadow-sm"
+                                                : "border-[#e5dcb8] bg-white/70 hover:border-emerald-300 hover:bg-white"
                                                 }`}
                                         >
                                             {/* Radio circle */}
                                             <div
                                                 className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 transition-all ${active
-                                                        ? "border-emerald-500 bg-emerald-500"
-                                                        : "border-[#c8bf9c]"
+                                                    ? "border-emerald-500 bg-emerald-500"
+                                                    : "border-[#c8bf9c]"
                                                     }`}
                                             >
                                                 {active && (

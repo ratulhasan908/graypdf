@@ -8,6 +8,7 @@ urlpatterns = [
     path("auth/register/", views.register, name="register"),
     path("auth/login/", views.login, name="login"),
     path("auth/logout/", views.logout, name="logout"),
+    path("auth/refresh/", views.refresh_token, name="refresh-token"),
     path("auth/me/", views.me, name="me"),
     path("auth/my-jobs/", views.my_jobs, name="my-jobs"),
 
@@ -28,8 +29,7 @@ urlpatterns = [
     path("tools/pdf-to-html/", views.pdf_to_html, name="pdf-to-html"),
     path("tools/markdown-to-pdf/", views.markdown_to_pdf, name="markdown-to-pdf"),
     path("tools/pdf-to-markdown/", views.pdf_to_markdown, name="pdf-to-markdown"),
-    path("auth/refresh/", views.refresh_token, name="refresh-token"),
-    
+
     path("jobs/<uuid:job_id>/status/", views.job_status, name="job-status"),
     path("jobs/<uuid:job_id>/download/", views.job_download, name="job-download"),
 ]

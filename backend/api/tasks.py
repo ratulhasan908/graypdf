@@ -837,13 +837,14 @@ def watermark_pdf_task(self, job_id):
                 can.translate(page_width / 2, page_height / 2)
                 can.rotate(45)
                 text_width = can.stringWidth(text, "Helvetica-Bold", font_size)
-                can.drawString(-text_width / 2, -font_size / 3)
+                can.drawString(-text_width / 2, -font_size / 3, text)
             else:
                 # Center horizontally and vertically
                 text_width = can.stringWidth(text, "Helvetica-Bold", font_size)
                 can.drawString(
                     (page_width - text_width) / 2,
                     (page_height - font_size) / 2,
+                    text,
                 )
 
             can.restoreState()

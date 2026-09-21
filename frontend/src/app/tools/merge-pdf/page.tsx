@@ -81,8 +81,15 @@ export default function MergePdfPage() {
 
     function startPolling(jobId: string) {
         stopPolling();
+        const startedAt = Date.now();
         pollRef.current = setInterval(async () => {
             try {
+                if (Date.now() - startedAt > 120000) {
+                    stopPolling();
+                    setLoading(false);
+                    setError("The PDF worker is taking too long to respond. Please try again.");
+                    return;
+                }
                 const updated = await apiFetch<Job>(`/jobs/${jobId}/status/`);
                 setJob(updated);
                 if (updated.status === "completed" || updated.status === "failed") {
@@ -162,8 +169,8 @@ export default function MergePdfPage() {
                         onDragLeave={() => setDragActive(false)}
                         onClick={() => document.getElementById("file-input")?.click()}
                         className={`relative group cursor-pointer rounded-3xl p-10 text-center transition-all duration-300 overflow-hidden ${dragActive
-                                ? "bg-white/90 scale-[1.02] shadow-2xl"
-                                : "bg-white/70 hover:bg-white hover:shadow-xl"
+                            ? "bg-white/90 scale-[1.02] shadow-2xl"
+                            : "bg-white/70 hover:bg-white hover:shadow-xl"
                             }`}
                         style={{
                             border: dragActive

@@ -28,11 +28,13 @@ from .rate_limit import check_and_increment_guest, check_and_increment_user, get
 from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
 from django.http import FileResponse
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
+from kombu.exceptions import OperationalError
 
 from .models import Job
 from .serializers import RegisterSerializer, JobSerializer
@@ -66,6 +68,15 @@ def _get_client_identifier(request):
     if not ip:
         ip = request.META.get("REMOTE_ADDR", "unknown")
     return f"ip:{ip}"
+
+
+def _enqueue_job(task, job):
+    try:
+        task.delay(str(job.id))
+    except OperationalError as exc:
+        job.status = "failed"
+        job.error_message = f"Background worker unavailable: {exc}"
+        job.save(update_fields=["status", "error_message"])
 
 
 # ---------- Auth endpoints ----------
@@ -231,8 +242,8 @@ def merge_pdf(request):
         input_files=saved_names,
     )
 
-    # Enqueue Celery task
-    merge_pdf_task.delay(str(job.id))
+    # Enqueue Celery task. Do not leave a job pending when the broker is down.
+    _enqueue_job(merge_pdf_task, job)
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -256,6 +267,14 @@ def job_status(request, job_id):
             {"detail": "Not authorized."},
             status=status.HTTP_403_FORBIDDEN,
         )
+
+    # Do not leave the client polling forever when a worker disappeared.
+    if job.status in ("pending", "processing"):
+        age = timezone.now() - job.created_at
+        if age.total_seconds() > 2 * 60:
+            job.status = "failed"
+            job.error_message = "The background worker did not finish this job. Please try again."
+            job.save(update_fields=["status", "error_message"])
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data)
@@ -374,7 +393,7 @@ def split_pdf(request):
         options={"mode": mode, "ranges": ranges},
     )
 
-    split_pdf_task.delay(str(job.id))
+    _enqueue_job(split_pdf_task, job)
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -451,7 +470,7 @@ def compress_pdf(request):
         options={"quality": quality},
     )
 
-    compress_pdf_task.delay(str(job.id))
+    _enqueue_job(compress_pdf_task, job)
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -525,7 +544,7 @@ def rotate_pdf(request):
         options={"angle": angle, "pages": pages_spec},
     )
 
-    rotate_pdf_task.delay(str(job.id))
+    _enqueue_job(rotate_pdf_task, job)
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -597,7 +616,7 @@ def pdf_to_jpg(request):
         options={"dpi": dpi},
     )
 
-    pdf_to_jpg_task.delay(str(job.id))
+    _enqueue_job(pdf_to_jpg_task, job)
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -672,7 +691,7 @@ def jpg_to_pdf(request):
         options={"page_size": page_size},
     )
 
-    jpg_to_pdf_task.delay(str(job.id))
+    _enqueue_job(jpg_to_pdf_task, job)
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -755,7 +774,7 @@ def protect_pdf(request):
         },
     )
 
-    protect_pdf_task.delay(str(job.id))
+    _enqueue_job(protect_pdf_task, job)
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -821,7 +840,7 @@ def unlock_pdf(request):
         options={"password": password},
     )
 
-    unlock_pdf_task.delay(str(job.id))
+    _enqueue_job(unlock_pdf_task, job)
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -917,7 +936,7 @@ def watermark_pdf(request):
         },
     )
 
-    watermark_pdf_task.delay(str(job.id))
+    _enqueue_job(watermark_pdf_task, job)
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -1007,7 +1026,7 @@ def page_numbers(request):
         },
     )
 
-    page_numbers_task.delay(str(job.id))
+    _enqueue_job(page_numbers_task, job)
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -1097,7 +1116,7 @@ def organize_pdf(request):
         options={"order": order},
     )
 
-    organize_pdf_task.delay(str(job.id))
+    _enqueue_job(organize_pdf_task, job)
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -1227,7 +1246,7 @@ def crop_pdf(request):
         },
     )
 
-    crop_pdf_task.delay(str(job.id))
+    _enqueue_job(crop_pdf_task, job)
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -1297,7 +1316,7 @@ def html_to_pdf(request):
         options={"html": html_content},
     )
 
-    html_to_pdf_task.delay(str(job.id))
+    _enqueue_job(html_to_pdf_task, job)
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -1366,7 +1385,7 @@ def pdf_to_html(request):
         options={"layout": layout},
     )
 
-    pdf_to_html_task.delay(str(job.id))
+    _enqueue_job(pdf_to_html_task, job)
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -1413,7 +1432,7 @@ def markdown_to_pdf(request):
         options={"markdown": md_content},
     )
 
-    markdown_to_pdf_task.delay(str(job.id))
+    _enqueue_job(markdown_to_pdf_task, job)
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -1481,7 +1500,7 @@ def pdf_to_markdown(request):
         options={"layout": layout},
     )
 
-    pdf_to_markdown_task.delay(str(job.id))
+    _enqueue_job(pdf_to_markdown_task, job)
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)

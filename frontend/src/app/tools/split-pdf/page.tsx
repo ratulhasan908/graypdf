@@ -74,8 +74,15 @@ export default function SplitPdfPage() {
 
     function startPolling(jobId: string) {
         stopPolling();
+        const startedAt = Date.now();
         pollRef.current = setInterval(async () => {
             try {
+                if (Date.now() - startedAt > 120000) {
+                    stopPolling();
+                    setLoading(false);
+                    setError("The PDF worker is taking too long to respond. Please try again.");
+                    return;
+                }
                 const updated = await apiFetch<Job>(`/jobs/${jobId}/status/`);
                 setJob(updated);
                 if (updated.status === "completed" || updated.status === "failed") {
@@ -160,8 +167,8 @@ export default function SplitPdfPage() {
                         onDragLeave={() => setDragActive(false)}
                         onClick={() => document.getElementById("file-input")?.click()}
                         className={`relative group cursor-pointer rounded-3xl p-10 text-center transition-all duration-300 overflow-hidden ${dragActive
-                                ? "bg-white/90 scale-[1.02] shadow-2xl"
-                                : "bg-white/70 hover:bg-white hover:shadow-xl"
+                            ? "bg-white/90 scale-[1.02] shadow-2xl"
+                            : "bg-white/70 hover:bg-white hover:shadow-xl"
                             }`}
                         style={{
                             border: dragActive ? "2px solid #8b5cf6" : "2px dashed #e5dcb8",
@@ -237,8 +244,8 @@ export default function SplitPdfPage() {
                                     type="button"
                                     onClick={() => setMode("each")}
                                     className={`py-3 rounded-xl font-medium text-sm transition-all ${mode === "each"
-                                            ? "bg-gradient-to-br from-violet-500 to-violet-600 text-white shadow-md"
-                                            : "text-[#0D1C42]/70 hover:bg-white"
+                                        ? "bg-gradient-to-br from-violet-500 to-violet-600 text-white shadow-md"
+                                        : "text-[#0D1C42]/70 hover:bg-white"
                                         }`}
                                 >
                                     Every page separate
@@ -247,8 +254,8 @@ export default function SplitPdfPage() {
                                     type="button"
                                     onClick={() => setMode("range")}
                                     className={`py-3 rounded-xl font-medium text-sm transition-all ${mode === "range"
-                                            ? "bg-gradient-to-br from-violet-500 to-violet-600 text-white shadow-md"
-                                            : "text-[#0D1C42]/70 hover:bg-white"
+                                        ? "bg-gradient-to-br from-violet-500 to-violet-600 text-white shadow-md"
+                                        : "text-[#0D1C42]/70 hover:bg-white"
                                         }`}
                                 >
                                     Custom ranges
