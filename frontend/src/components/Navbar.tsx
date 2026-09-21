@@ -20,18 +20,21 @@ export default function Navbar() {
     }
 
     return (
-        <nav className="sticky top-0 z-50 glass border-b border-[#e5dcb8]">
-            <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
+        <nav className="sticky top-0 z-50 glass border-b border-[#e5dcb8]/60">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
                 {/* Logo */}
                 <Link
                     href="/"
-                    className="flex items-center gap-2 group"
+                    className="flex items-center gap-2.5 group"
                     aria-label="GrayPDF home"
                 >
-                    <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#010736] to-[#22396f] flex items-center justify-center shadow-sm group-hover:shadow-md transition-shadow">
-                        <span className="text-[#FCF1D0] font-bold text-lg">G</span>
+                    <div className="relative w-9 h-9 rounded-xl bg-gradient-to-br from-[#010736] via-[#0d1c42] to-[#22396f] flex items-center justify-center shadow-md group-hover:shadow-lg transition-all duration-300 group-hover:scale-105">
+                        <span className="text-[#FCF1D0] font-bold text-lg tracking-tight">
+                            G
+                        </span>
+                        <div className="absolute inset-0 rounded-xl bg-gradient-to-br from-[#4f7cff] to-[#8b5cf6] opacity-0 group-hover:opacity-30 transition-opacity duration-300 blur-md -z-10" />
                     </div>
-                    <span className="text-xl font-bold tracking-tight text-[#010736]">
+                    <span className="text-lg font-bold tracking-tight text-[#010736]">
                         Gray<span className="text-[#22396F]">PDF</span>
                     </span>
                 </Link>
@@ -42,7 +45,7 @@ export default function Navbar() {
                     {usage && (
                         <Link
                             href={user ? "/dashboard" : "/register"}
-                            className={`text-xs px-3 py-1.5 rounded-full font-medium transition-all border ${usage.remaining === 0
+                            className={`hidden sm:inline-flex text-xs px-3 py-1.5 rounded-full font-medium transition-all border ${usage.remaining === 0
                                     ? "bg-red-50 text-red-700 border-red-200 hover:bg-red-100"
                                     : usage.remaining <= 2
                                         ? "bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100"
@@ -64,12 +67,11 @@ export default function Navbar() {
                         <>
                             <Link
                                 href="/dashboard"
-                                className="hidden sm:inline-block text-sm font-medium text-[#0D1C42] hover:text-[#22396F] transition-colors"
+                                className="hidden sm:inline-block text-sm font-medium text-[#0D1C42] hover:text-[#22396F] transition-colors px-3 py-2"
                             >
                                 Dashboard
                             </Link>
 
-                            {/* User chip with avatar */}
                             <div className="flex items-center gap-2 pl-1 pr-3 py-1 rounded-full bg-white/70 border border-[#e5dcb8]">
                                 <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[#22396F] to-[#0D1C42] flex items-center justify-center text-[#FCF1D0] text-xs font-bold">
                                     {getInitials(user.username)}
@@ -81,7 +83,7 @@ export default function Navbar() {
 
                             <button
                                 onClick={handleLogout}
-                                className="text-sm font-medium text-[#0D1C42] hover:text-red-600 transition-colors"
+                                className="text-sm font-medium text-[#0D1C42] hover:text-red-600 transition-colors px-2"
                             >
                                 Log out
                             </button>
@@ -96,9 +98,9 @@ export default function Navbar() {
                             </Link>
                             <Link
                                 href="/register"
-                                className="text-sm font-semibold bg-gradient-to-br from-[#010736] to-[#22396f] hover:brightness-110 text-[#FCF1D0] px-4 py-2 rounded-lg transition-all shadow-sm hover:shadow-md"
+                                className="relative text-sm font-semibold bg-gradient-to-br from-[#010736] to-[#22396f] hover:brightness-110 text-[#FCF1D0] px-4 py-2 rounded-lg transition-all shadow-md hover:shadow-lg hover:-translate-y-0.5"
                             >
-                                Sign up
+                                Sign up free
                             </Link>
                         </>
                     )}
