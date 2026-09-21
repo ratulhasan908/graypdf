@@ -44,6 +44,7 @@ class Job(models.Model):
         ("organize", "Organize PDF"),
         ("crop", "Crop PDF"),
         ("html-to-pdf", "HTML to PDF"),
+        ("pdf-to-html", "PDF to HTML"),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

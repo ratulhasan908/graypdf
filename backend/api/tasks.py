@@ -1250,3 +1250,110 @@ def html_to_pdf_task(self, job_id):
         job.error_message = str(e)
         job.save(update_fields=["status", "error_message"])
         return {"error": str(e)}
+
+
+
+
+@shared_task(bind=True)
+def pdf_to_html_task(self, job_id):
+    """
+    Extract text from a PDF and produce an HTML file.
+    Options:
+      - layout: "simple" | "preserve" (default: "preserve")
+    """
+    import html as html_lib
+    import fitz  # PyMuPDF
+
+    try:
+        job = Job.objects.get(id=job_id)
+    except Job.DoesNotExist:
+        return {"error": "Job not found"}
+
+    try:
+        job.status = "processing"
+        job.save(update_fields=["status"])
+
+        upload_dir = Path(settings.MEDIA_ROOT) / "uploads"
+        output_dir = Path(settings.MEDIA_ROOT) / "outputs"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        if not job.input_files:
+            raise ValueError("No input file found.")
+
+        input_path = upload_dir / job.input_files[0]
+        if not input_path.exists():
+            raise FileNotFoundError(f"Input file missing: {input_path.name}")
+
+        options = job.options or {}
+        layout = options.get("layout", "preserve")
+        if layout not in ("simple", "preserve"):
+            layout = "preserve"
+
+        doc = fitz.open(str(input_path))
+        total_pages = len(doc)
+
+        if layout == "preserve":
+            # PyMuPDF built-in HTML export — keeps approximate positions
+            html_parts = []
+            for page in doc:
+                html_parts.append(page.get_text("html"))
+            html_output = "\n".join(html_parts)
+        else:
+            # Simple layout — headings + paragraphs
+            body_parts = []
+            for i, page in enumerate(doc):
+                text = page.get_text("text")
+                if not text.strip():
+                    continue
+                body_parts.append(f'<section class="page">')
+                body_parts.append(f'<div class="page-num">Page {i + 1}</div>')
+                for para in text.split("\n\n"):
+                    para = para.strip()
+                    if not para:
+                        continue
+                    escaped = html_lib.escape(para)
+                    body_parts.append(f"<p>{escaped}</p>")
+                body_parts.append("</section>")
+
+            html_output = (
+                "<!DOCTYPE html>\n"
+                '<html lang="en">\n<head>\n'
+                '<meta charset="utf-8">\n'
+                "<title>Converted PDF</title>\n"
+                "<style>\n"
+                "body { font-family: Georgia, serif; max-width: 800px; "
+                "margin: 2rem auto; padding: 1rem; line-height: 1.6; }\n"
+                ".page { margin-bottom: 3rem; padding-bottom: 2rem; "
+                "border-bottom: 1px solid #eee; }\n"
+                ".page-num { color: #888; font-size: 0.8em; "
+                "text-transform: uppercase; letter-spacing: 0.05em; "
+                "margin-bottom: 1rem; }\n"
+                "</style>\n</head>\n<body>\n"
+                + "\n".join(body_parts)
+                + "\n</body>\n</html>"
+            )
+
+        doc.close()
+
+        output_name = f"{uuid.uuid4().hex}.html"
+        output_path = output_dir / output_name
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(html_output)
+
+        job.status = "completed"
+        job.output_file = f"outputs/{output_name}"
+        job.completed_at = datetime.now()
+        job.save(update_fields=["status", "output_file", "completed_at"])
+
+        try:
+            os.remove(input_path)
+        except OSError:
+            pass
+
+        return {"status": "completed", "pages": total_pages}
+
+    except Exception as e:
+        job.status = "failed"
+        job.error_message = str(e)
+        job.save(update_fields=["status", "error_message"])
+        return {"error": str(e)}
