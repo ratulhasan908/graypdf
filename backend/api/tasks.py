@@ -1357,3 +1357,52 @@ def pdf_to_html_task(self, job_id):
         job.error_message = str(e)
         job.save(update_fields=["status", "error_message"])
         return {"error": str(e)}
+
+
+
+
+@shared_task(bind=True)
+def markdown_to_pdf_task(self, job_id):
+    """
+    Convert Markdown to PDF.
+    Options:
+      - markdown: Markdown string
+    """
+    import ironpress
+
+    try:
+        job = Job.objects.get(id=job_id)
+    except Job.DoesNotExist:
+        return {"error": "Job not found"}
+
+    try:
+        job.status = "processing"
+        job.save(update_fields=["status"])
+
+        output_dir = Path(settings.MEDIA_ROOT) / "outputs"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        options = job.options or {}
+        md_content = options.get("markdown", "")
+        if not isinstance(md_content, str) or not md_content.strip():
+            raise ValueError("Markdown content is required.")
+
+        pdf_bytes = ironpress.markdown_to_pdf(md_content)
+
+        output_name = f"{uuid.uuid4().hex}.pdf"
+        output_path = output_dir / output_name
+        with open(output_path, "wb") as f:
+            f.write(pdf_bytes)
+
+        job.status = "completed"
+        job.output_file = f"outputs/{output_name}"
+        job.completed_at = datetime.now()
+        job.save(update_fields=["status", "output_file", "completed_at"])
+
+        return {"status": "completed"}
+
+    except Exception as e:
+        job.status = "failed"
+        job.error_message = str(e)
+        job.save(update_fields=["status", "error_message"])
+        return {"error": str(e)}

@@ -19,6 +19,7 @@ from .tasks import (
     crop_pdf_task,
     html_to_pdf_task,
     pdf_to_html_task,
+    markdown_to_pdf_task,
 )
 from .rate_limit import check_and_increment_guest, check_and_increment_user, get_usage
 
@@ -1361,6 +1362,53 @@ def pdf_to_html(request):
     )
 
     pdf_to_html_task.delay(str(job.id))
+
+    serializer = JobSerializer(job, context={"request": request})
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def markdown_to_pdf(request):
+    """
+    Accept Markdown content, enqueue conversion task.
+    """
+    from .tasks import markdown_to_pdf_task
+
+    md_content = request.data.get("markdown", "")
+    if not isinstance(md_content, str) or not md_content.strip():
+        return Response(
+            {"detail": "Markdown content is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Rate limit
+    if request.user.is_authenticated:
+        allowed, used, limit = check_and_increment_user(request.user)
+    else:
+        allowed, used, limit = check_and_increment_guest(request)
+
+    if not allowed:
+        return Response(
+            {
+                "detail": f"Daily limit reached ({limit} files/day). "
+                          f"{'Sign up for more.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
+                "used": used,
+                "limit": limit,
+            },
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
+    job = Job.objects.create(
+        user=request.user if request.user.is_authenticated else None,
+        tool="markdown-to-pdf",
+        status="pending",
+        input_files=[],
+        options={"markdown": md_content},
+    )
+
+    markdown_to_pdf_task.delay(str(job.id))
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
