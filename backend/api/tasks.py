@@ -1200,3 +1200,53 @@ def crop_pdf_task(self, job_id):
         job.error_message = str(e)
         job.save(update_fields=["status", "error_message"])
         return {"error": str(e)}
+
+
+
+
+@shared_task(bind=True)
+def html_to_pdf_task(self, job_id):
+    """
+    Convert HTML content to PDF.
+    Options:
+      - html: HTML string
+    """
+    import ironpress
+
+    try:
+        job = Job.objects.get(id=job_id)
+    except Job.DoesNotExist:
+        return {"error": "Job not found"}
+
+    try:
+        job.status = "processing"
+        job.save(update_fields=["status"])
+
+        output_dir = Path(settings.MEDIA_ROOT) / "outputs"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        options = job.options or {}
+        html_content = options.get("html", "").strip()
+
+        if not html_content:
+            raise ValueError("HTML content is required.")
+
+        pdf_bytes = ironpress.html_to_pdf(html_content)
+
+        output_name = f"{uuid.uuid4().hex}.pdf"
+        output_path = output_dir / output_name
+        with open(output_path, "wb") as f:
+            f.write(pdf_bytes)
+
+        job.status = "completed"
+        job.output_file = f"outputs/{output_name}"
+        job.completed_at = datetime.now()
+        job.save(update_fields=["status", "output_file", "completed_at"])
+
+        return {"status": "completed"}
+
+    except Exception as e:
+        job.status = "failed"
+        job.error_message = str(e)
+        job.save(update_fields=["status", "error_message"])
+        return {"error": str(e)}

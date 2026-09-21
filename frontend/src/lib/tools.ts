@@ -104,6 +104,14 @@ export const tools: Tool[] = [
         color: "from-orange-500 to-orange-600",
         available: true,
     },
+    {
+        slug: "html-to-pdf",
+        name: "HTML to PDF",
+        description: "Convert HTML content to a PDF document.",
+        icon: "🌐",
+        color: "from-slate-500 to-slate-600",
+        available: true,
+    },
 ];
 
 export function getToolBySlug(slug: string): Tool | undefined {

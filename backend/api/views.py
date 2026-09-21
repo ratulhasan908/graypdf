@@ -17,6 +17,7 @@ from .tasks import (
     page_numbers_task,
     organize_pdf_task,
     crop_pdf_task,
+    html_to_pdf_task,
 )
 from .rate_limit import check_and_increment_guest, check_and_increment_user, get_usage
 
@@ -1240,3 +1241,53 @@ def my_jobs(request):
         "jobs": serializer.data,
         "total": total,
     })
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def html_to_pdf(request):
+    """
+    Accept HTML content, enqueue conversion task.
+    """
+    import uuid
+    from pathlib import Path
+    from django.conf import settings
+    from .tasks import html_to_pdf_task
+
+    html_content = request.data.get("html", "").strip()
+
+    if not html_content:
+        return Response(
+            {"detail": "HTML content is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Rate limit
+    if request.user.is_authenticated:
+        allowed, used, limit = check_and_increment_user(request.user)
+    else:
+        allowed, used, limit = check_and_increment_guest(request)
+
+    if not allowed:
+        return Response(
+            {
+                "detail": f"Daily limit reached ({limit} files/day). "
+                          f"{'Sign up for more.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
+                "used": used,
+                "limit": limit,
+            },
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
+    job = Job.objects.create(
+        user=request.user if request.user.is_authenticated else None,
+        tool="html-to-pdf",
+        status="pending",
+        input_files=[],
+        options={"html": html_content},
+    )
+
+    html_to_pdf_task.delay(str(job.id))
+
+    serializer = JobSerializer(job, context={"request": request})
+    return Response(serializer.data, status=status.HTTP_201_CREATED)

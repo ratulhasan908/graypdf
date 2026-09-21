@@ -24,6 +24,7 @@ urlpatterns = [
     path("tools/organize/", views.organize_pdf, name="organize-pdf"),
     path("tools/page-count/", views.pdf_page_count, name="pdf-page-count"),
     path("tools/crop/", views.crop_pdf, name="crop-pdf"),
+    path("tools/html-to-pdf/", views.html_to_pdf, name="html-to-pdf"),
 
     path("jobs/<uuid:job_id>/status/", views.job_status, name="job-status"),
     path("jobs/<uuid:job_id>/download/", views.job_download, name="job-download"),
