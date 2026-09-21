@@ -13,8 +13,8 @@ import {
     Crop,
     Code,
     FileCode,
-    FileText,
     FileType,
+    FileText,
 } from "lucide-react";
 
 export type Tool = {
@@ -22,8 +22,8 @@ export type Tool = {
     name: string;
     description: string;
     icon: any; // Lucide icon component
-    color: string;
-    glow: string;
+    color: string; // Tailwind gradient classes
+    glow: string; // rgba for glow effects
     available: boolean;
     category: "convert" | "organize" | "secure" | "optimize";
 };
