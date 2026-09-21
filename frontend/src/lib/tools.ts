@@ -128,6 +128,14 @@ export const tools: Tool[] = [
         color: "from-purple-500 to-purple-600",
         available: true,
     },
+    {
+        slug: "pdf-to-markdown",
+        name: "PDF to Markdown",
+        description: "Convert PDF text into clean Markdown.",
+        icon: "📄",
+        color: "from-teal-500 to-teal-600",
+        available: true,
+    },
 ];
 
 export function getToolBySlug(slug: string): Tool | undefined {

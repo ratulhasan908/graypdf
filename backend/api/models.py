@@ -46,6 +46,7 @@ class Job(models.Model):
         ("html-to-pdf", "HTML to PDF"),
         ("pdf-to-html", "PDF to HTML"),
         ("markdown-to-pdf", "Markdown to PDF"),
+        ("pdf-to-markdown", "PDF to Markdown"),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

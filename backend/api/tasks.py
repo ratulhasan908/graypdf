@@ -1406,3 +1406,91 @@ def markdown_to_pdf_task(self, job_id):
         job.error_message = str(e)
         job.save(update_fields=["status", "error_message"])
         return {"error": str(e)}
+
+
+
+
+@shared_task(bind=True)
+def pdf_to_markdown_task(self, job_id):
+    """
+    Extract content from a PDF and produce a Markdown file.
+    Options:
+      - layout: "simple" | "preserve" (default: "preserve")
+    """
+    import fitz  # PyMuPDF
+
+    try:
+        job = Job.objects.get(id=job_id)
+    except Job.DoesNotExist:
+        return {"error": "Job not found"}
+
+    try:
+        job.status = "processing"
+        job.save(update_fields=["status"])
+
+        upload_dir = Path(settings.MEDIA_ROOT) / "uploads"
+        output_dir = Path(settings.MEDIA_ROOT) / "outputs"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        if not job.input_files:
+            raise ValueError("No input file found.")
+
+        input_path = upload_dir / job.input_files[0]
+        if not input_path.exists():
+            raise FileNotFoundError(f"Input file missing: {input_path.name}")
+
+        options = job.options or {}
+        layout = options.get("layout", "preserve")
+        if layout not in ("simple", "preserve"):
+            layout = "preserve"
+
+        doc = fitz.open(str(input_path))
+        total_pages = len(doc)
+
+        md_parts = []
+
+        if layout == "preserve":
+            # PyMuPDF built-in markdown export — keeps headings, tables, links
+            for page in doc:
+                md_parts.append(page.get_text("markdown"))
+        else:
+            # Simple layout — plain text per page with page separators
+            for i, page in enumerate(doc):
+                text = page.get_text("text").strip()
+                if not text:
+                    continue
+                md_parts.append(f"## Page {i + 1}\n")
+                md_parts.append(text)
+                md_parts.append("")
+
+        doc.close()
+
+        md_output = "\n\n".join(md_parts).strip()
+        if not md_output:
+            raise ValueError(
+                "No extractable text found. The PDF may be a scanned image "
+                "(needs OCR)."
+            )
+
+        output_name = f"{uuid.uuid4().hex}.md"
+        output_path = output_dir / output_name
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(md_output)
+
+        job.status = "completed"
+        job.output_file = f"outputs/{output_name}"
+        job.completed_at = datetime.now()
+        job.save(update_fields=["status", "output_file", "completed_at"])
+
+        try:
+            os.remove(input_path)
+        except OSError:
+            pass
+
+        return {"status": "completed", "pages": total_pages}
+
+    except Exception as e:
+        job.status = "failed"
+        job.error_message = str(e)
+        job.save(update_fields=["status", "error_message"])
+        return {"error": str(e)}
