@@ -2,6 +2,7 @@ import os
 import uuid
 from datetime import datetime
 from pathlib import Path
+from rest_framework_simplejwt.tokens import RefreshToken
 
 # from .tasks import merge_pdf_task, split_pdf_task, compress_pdf_task, rotate_pdf_task, pdf_to_jpg_task, jpg_to_pdf_task, protect_pdf_task, unlock_pdf_task
 from .tasks import (
@@ -1484,3 +1485,39 @@ def pdf_to_markdown(request):
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def refresh_token(request):
+    """
+    Issue a new access token using the refresh_token cookie.
+    """
+    refresh_str = request.COOKIES.get("refresh_token")
+    if not refresh_str:
+        return Response(
+            {"detail": "No refresh token."},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    try:
+        refresh = RefreshToken(refresh_str)
+        new_access = str(refresh.access_token)
+    except Exception as e:
+        return Response(
+            {"detail": f"Invalid refresh token: {str(e)}"},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    response = Response({"detail": "Refreshed."})
+    response.set_cookie(
+        key="access_token",
+        value=new_access,
+        httponly=True,
+        secure=False,          # True in production (HTTPS)
+        samesite="Lax",
+        max_age=60 * 30,       # 30 minutes
+        path="/",
+    )
+    return response
