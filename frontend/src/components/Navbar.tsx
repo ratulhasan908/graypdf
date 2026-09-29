@@ -59,19 +59,17 @@ export default function Navbar() {
                             {usage && (
                                 <Link
                                     href={user ? "/dashboard" : "/register"}
-                                    className={`hidden sm:inline-flex text-xs px-3 py-1.5 rounded-full font-medium transition-all border ${usage.remaining === 0
-                                            ? "bg-red-50 text-red-700 border-red-200 hover:bg-red-100"
-                                            : usage.remaining <= 2
-                                                ? "bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100"
-                                                : "bg-white/70 text-[#0D1C42] border-[#e5dcb8] hover:bg-white"
+                                    className={`hidden sm:inline-flex text-xs px-3 py-1.5 rounded-full font-medium transition-all border ${usage.is_guest
+                                            ? usage.remaining === 0
+                                                ? "bg-red-50 text-red-700 border-red-200 hover:bg-red-100"
+                                                : usage.remaining <= 2
+                                                    ? "bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100"
+                                                    : "bg-white/70 text-[#0D1C42] border-[#e5dcb8] hover:bg-white"
+                                            : "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100"
                                         }`}
-                                    title={
-                                        usage.is_guest
-                                            ? "Sign up for 20 files/day"
-                                            : "Your daily usage"
-                                    }
+                                    title={usage.is_guest ? "Sign up for unlimited files" : "Unlimited usage"}
                                 >
-                                    {usage.used}/{usage.limit} today
+                                    {usage.is_guest ? `${usage.used}/${usage.limit} today` : "Unlimited"}
                                 </Link>
                             )}
 
