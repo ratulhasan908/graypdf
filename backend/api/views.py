@@ -2,7 +2,6 @@ import os
 import uuid
 from datetime import datetime
 from pathlib import Path
-from rest_framework_simplejwt.tokens import RefreshToken
 
 # from .tasks import merge_pdf_task, split_pdf_task, compress_pdf_task, rotate_pdf_task, pdf_to_jpg_task, jpg_to_pdf_task, protect_pdf_task, unlock_pdf_task
 from .tasks import (
@@ -47,27 +46,21 @@ def _set_jwt_cookies(response, refresh_token):
     access_token = str(refresh_token.access_token)
     refresh_str = str(refresh_token)
 
+    secure = getattr(settings, "COOKIE_SECURE", False)
+    samesite = getattr(settings, "COOKIE_SAMESITE", "Lax")
+
     response.set_cookie(
         key="access_token", value=access_token,
-        httponly=True, secure=False, samesite="Lax",
+        httponly=True, secure=secure, samesite=samesite,
         max_age=60 * 30, path="/",
     )
     response.set_cookie(
         key="refresh_token", value=refresh_str,
-        httponly=True, secure=False, samesite="Lax",
+        httponly=True, secure=secure, samesite=samesite,
         max_age=60 * 60 * 24 * 7, path="/",
     )
     return response
 
-
-def _get_client_identifier(request):
-    """Return a string identifying the user (auth or IP)."""
-    if request.user.is_authenticated:
-        return f"user:{request.user.id}"
-    ip = request.META.get("HTTP_X_FORWARDED_FOR", "").split(",")[0].strip()
-    if not ip:
-        ip = request.META.get("REMOTE_ADDR", "unknown")
-    return f"ip:{ip}"
 
 
 def _enqueue_job(task, job):
@@ -268,12 +261,15 @@ def job_status(request, job_id):
             status=status.HTTP_403_FORBIDDEN,
         )
 
-    # Do not leave the client polling forever when a worker disappeared.
+    # Auto-fail jobs that have been pending/processing WAY too long.
+    # The worker is doing the real timeout enforcement; this is just
+    # a UI safety net.
     if job.status in ("pending", "processing"):
-        age = timezone.now() - job.created_at
-        if age.total_seconds() > 2 * 60:
+        from django.utils import timezone
+        age_seconds = (timezone.now() - job.created_at).total_seconds()
+        if age_seconds > 600:  # 10 minutes
             job.status = "failed"
-            job.error_message = "The background worker did not finish this job. Please try again."
+            job.error_message = "Job took too long to process. Please try again."
             job.save(update_fields=["status", "error_message"])
 
     serializer = JobSerializer(job, context={"request": request})
@@ -762,17 +758,26 @@ def protect_pdf(request):
         for chunk in f.chunks():
             dest.write(chunk)
 
+    # Password is passed via a separate channel that isn't persisted.
+    # We'll use a temporary Redis key tied to the job ID.
+    import redis as _redis
+    import os as _os
+
     job = Job.objects.create(
         user=request.user if request.user.is_authenticated else None,
         tool="protect",
         status="pending",
         input_files=[filename],
         options={
-            "password": password,
+            # password NOT stored here
             "allow_printing": allow_printing,
             "allow_copying": allow_copying,
         },
     )
+
+    # Store the password in Redis for 5 minutes, keyed by job ID
+    r = _redis.from_url(_os.getenv("REDIS_URL", "redis://localhost:6379/0"))
+    r.setex(f"pdf_password:{job.id}", 300, password)
 
     _enqueue_job(protect_pdf_task, job)
 
@@ -832,13 +837,20 @@ def unlock_pdf(request):
         for chunk in f.chunks():
             dest.write(chunk)
 
+    import redis as _redis
+    import os as _os
+
     job = Job.objects.create(
         user=request.user if request.user.is_authenticated else None,
         tool="unlock",
         status="pending",
         input_files=[filename],
-        options={"password": password},
+        options={},   # no password here
     )
+
+    # Store the password in Redis for 5 minutes, keyed by job ID
+    r = _redis.from_url(_os.getenv("REDIS_URL", "redis://localhost:6379/0"))
+    r.setex(f"pdf_password:{job.id}", 300, password or "")
 
     _enqueue_job(unlock_pdf_task, job)
 
@@ -1128,6 +1140,10 @@ def pdf_page_count(request):
     """
     Returns the number of pages in an uploaded PDF.
     Used by Organize UI to build the page grid.
+
+    This is a metadata read, not a processing job, so it's cheap. But
+    we still gate it with the same rate limit as full tool requests to
+    prevent scraping / abuse.
     """
     from pypdf import PdfReader
 
@@ -1143,6 +1159,23 @@ def pdf_page_count(request):
         return Response(
             {"detail": f"{f.name} is not a PDF file."},
             status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Rate limit — same rules as tools, since this consumes compute
+    if request.user.is_authenticated:
+        allowed, used, limit = check_and_increment_user(request.user)
+    else:
+        allowed, used, limit = check_and_increment_guest(request)
+
+    if not allowed:
+        return Response(
+            {
+                "detail": f"Daily limit reached ({limit} files/day). "
+                          f"{'Sign up for more.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
+                "used": used,
+                "limit": limit,
+            },
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
         )
 
     try:
@@ -1181,10 +1214,17 @@ def crop_pdf(request):
         )
 
     # Rate limit
+    # Count each uploaded file as one unit
+    file_count = len(files)
     if request.user.is_authenticated:
-        allowed, used, limit = check_and_increment_user(request.user)
+        allowed, used, limit = check_and_increment_user(request.user, increment_by=file_count)
     else:
-        allowed, used, limit = check_and_increment_guest(request)
+        # Guest: increment per-file too (call N times)
+        allowed = True
+        for _ in range(file_count):
+            allowed, used, limit = check_and_increment_guest(request)
+            if not allowed:
+                break
 
     if not allowed:
         return Response(
@@ -1511,7 +1551,9 @@ def pdf_to_markdown(request):
 @permission_classes([AllowAny])
 def refresh_token(request):
     """
-    Issue a new access token using the refresh_token cookie.
+    Issue a new access + refresh token pair using the refresh_token cookie.
+    Implements rotation: the old refresh token is invalidated and a new
+    one is issued.
     """
     refresh_str = request.COOKIES.get("refresh_token")
     if not refresh_str:
@@ -1521,22 +1563,46 @@ def refresh_token(request):
         )
 
     try:
-        refresh = RefreshToken(refresh_str)
-        new_access = str(refresh.access_token)
+        old_refresh = RefreshToken(refresh_str)
+        new_access = str(old_refresh.access_token)
+        # Rotation: blacklist the old refresh (needs blacklist app), and issue new one
+        try:
+            old_refresh.blacklist()
+        except AttributeError:
+            # blacklist app not installed — safe to ignore for now
+            pass
+
+        # Get the user and issue a fresh refresh token
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        user = User.objects.get(id=old_refresh["user_id"])
+        new_refresh = RefreshToken.for_user(user)
     except Exception as e:
         return Response(
             {"detail": f"Invalid refresh token: {str(e)}"},
             status=status.HTTP_401_UNAUTHORIZED,
         )
 
+    secure = getattr(settings, "COOKIE_SECURE", False)
+    samesite = getattr(settings, "COOKIE_SAMESITE", "Lax")
+
     response = Response({"detail": "Refreshed."})
     response.set_cookie(
         key="access_token",
         value=new_access,
         httponly=True,
-        secure=False,          # True in production (HTTPS)
-        samesite="Lax",
-        max_age=60 * 30,       # 30 minutes
+        secure=secure,
+        samesite=samesite,
+        max_age=60 * 30,
+        path="/",
+    )
+    response.set_cookie(
+        key="refresh_token",
+        value=str(new_refresh),
+        httponly=True,
+        secure=secure,
+        samesite=samesite,
+        max_age=60 * 60 * 24 * 7,
         path="/",
     )
     return response

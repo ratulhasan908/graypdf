@@ -1,15 +1,48 @@
 import os
 import uuid
-from datetime import datetime
 from pathlib import Path
 
 from celery import shared_task
 from django.conf import settings
+from django.utils import timezone
 
 from .models import Job
 
 
-@shared_task(bind=True)
+def _check_page_count(reader_or_doc, context="PDF"):
+    """
+    Raise if the document exceeds the allowed page count.
+    Works with both pypdf PdfReader and fitz Document.
+    """
+    max_pages = getattr(settings, "MAX_PDF_PAGES", 500)
+    try:
+        count = len(reader_or_doc.pages)
+    except AttributeError:
+        # fitz uses __len__ on the doc itself
+        count = len(reader_or_doc)
+
+    if count > max_pages:
+        raise ValueError(
+            f"{context} has {count} pages — max allowed is {max_pages}."
+        )
+    return count
+
+
+def _check_output_size(path, context="Output"):
+    """Raise if the output file exceeds the configured cap."""
+    max_mb = getattr(settings, "MAX_OUTPUT_SIZE_MB", 200)
+    size_mb = os.path.getsize(path) / (1024 * 1024)
+    if size_mb > max_mb:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        raise ValueError(f"{context} is {size_mb:.1f} MB — max is {max_mb} MB.")
+
+
+    
+
+@shared_task(bind=True, autoretry_for=(), max_retries=0)
 def merge_pdf_task(self, job_id):
     """
     Merge PDFs for the given Job. Runs in a Celery worker.
@@ -29,18 +62,18 @@ def merge_pdf_task(self, job_id):
         output_dir = Path(settings.MEDIA_ROOT) / "outputs"
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # job.input_files holds the uploaded filenames
         input_paths = [upload_dir / name for name in job.input_files]
 
-        # Verify all files exist
         for p in input_paths:
             if not p.exists():
                 raise FileNotFoundError(f"Input file missing: {p.name}")
 
-        # Merge
+        # Merge with page count guard
         writer = PdfWriter()
+        total_pages = 0
         for path in input_paths:
             reader = PdfReader(str(path))
+            total_pages += _check_page_count(reader)
             for page in reader.pages:
                 writer.add_page(page)
 
@@ -50,13 +83,13 @@ def merge_pdf_task(self, job_id):
         with open(output_path, "wb") as out:
             writer.write(out)
 
-        # Mark complete
+        _check_output_size(output_path)
+
         job.status = "completed"
         job.output_file = f"outputs/{output_name}"
-        job.completed_at = datetime.now()
+        job.completed_at = timezone.now()
         job.save(update_fields=["status", "output_file", "completed_at"])
 
-        # Clean up uploaded inputs (they're no longer needed)
         for p in input_paths:
             try:
                 os.remove(p)
@@ -69,11 +102,11 @@ def merge_pdf_task(self, job_id):
         job.status = "failed"
         job.error_message = str(e)
         job.save(update_fields=["status", "error_message"])
-        return {"error": str(e)}
+        raise
 
 
 
-@shared_task
+@shared_task(autoretry_for=(), max_retries=0)
 def cleanup_old_files():
     """
     Runs every 15 min. Deletes files older than FILE_RETENTION_HOURS
@@ -119,7 +152,7 @@ def cleanup_old_files():
 
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, autoretry_for=(), max_retries=0)
 def split_pdf_task(self, job_id):
     """
     Split a PDF. Expects job.input_files = [filename] and job.options.
@@ -152,7 +185,7 @@ def split_pdf_task(self, job_id):
             raise FileNotFoundError(f"Input file missing: {input_path.name}")
 
         reader = PdfReader(str(input_path))
-        total_pages = len(reader.pages)
+        total_pages = _check_page_count(reader)
 
         # Build a list of page groups to write
         options = job.options or {}
@@ -220,11 +253,11 @@ def split_pdf_task(self, job_id):
         job.status = "failed"
         job.error_message = str(e)
         job.save(update_fields=["status", "error_message"])
-        return {"error": str(e)}
+        raise
 
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, autoretry_for=(), max_retries=0)
 def compress_pdf_task(self, job_id):
     """
     Compress a PDF with Ghostscript.
@@ -292,6 +325,8 @@ def compress_pdf_task(self, job_id):
         if not output_path.exists():
             raise RuntimeError("Ghostscript produced no output.")
 
+        _check_output_size(output_path)
+
         original_size = input_path.stat().st_size
         compressed_size = output_path.stat().st_size
         savings = 0
@@ -300,7 +335,7 @@ def compress_pdf_task(self, job_id):
 
         job.status = "completed"
         job.output_file = f"outputs/{output_name}"
-        job.completed_at = datetime.now()
+        job.completed_at = timezone.now()
         job.options = {
             **(job.options or {}),
             "original_size": original_size,
@@ -320,11 +355,11 @@ def compress_pdf_task(self, job_id):
         job.status = "failed"
         job.error_message = str(e)
         job.save(update_fields=["status", "error_message"])
-        return {"error": str(e)}
+        raise
 
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, autoretry_for=(), max_retries=0)
 def rotate_pdf_task(self, job_id):
     """
     Rotate PDF pages.
@@ -362,7 +397,7 @@ def rotate_pdf_task(self, job_id):
         pages_spec = options.get("pages", "all")
 
         reader = PdfReader(str(input_path))
-        total_pages = len(reader.pages)
+        total_pages = _check_page_count(reader)
 
         # Determine which page indices to rotate (0-based)
         if pages_spec == "all" or not pages_spec:
@@ -386,7 +421,6 @@ def rotate_pdf_task(self, job_id):
         writer = PdfWriter()
         for i, page in enumerate(reader.pages):
             if i in indices_to_rotate:
-                current = page.get("/Rotate", 0)
                 page.rotate(angle)
             writer.add_page(page)
 
@@ -411,11 +445,11 @@ def rotate_pdf_task(self, job_id):
         job.status = "failed"
         job.error_message = str(e)
         job.save(update_fields=["status", "error_message"])
-        return {"error": str(e)}
+        raise
 
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, autoretry_for=(), max_retries=0)
 def pdf_to_jpg_task(self, job_id):
     """
     Convert each page of a PDF to a JPG image.
@@ -452,32 +486,33 @@ def pdf_to_jpg_task(self, job_id):
         if dpi not in (72, 150, 300):
             dpi = 150
 
-        # Render each page to JPG
         doc = fitz.open(str(input_path))
-        total_pages = len(doc)
-        if total_pages == 0:
-            raise ValueError("PDF has no pages.")
+        try:
+            total_pages = _check_page_count(doc)
+            if total_pages == 0:
+                raise ValueError("PDF has no pages.")
 
-        zip_name = f"{uuid.uuid4().hex}.zip"
-        zip_path = output_dir / zip_name
+            zip_name = f"{uuid.uuid4().hex}.zip"
+            zip_path = output_dir / zip_name
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            written = []
-            for i, page in enumerate(doc):
-                # scale = dpi / 72 (PDF default is 72 dpi)
-                zoom = dpi / 72.0
-                matrix = fitz.Matrix(zoom, zoom)
-                pix = page.get_pixmap(matrix=matrix, alpha=False)
-                jpg_name = f"page-{i + 1}.jpg"
-                jpg_path = Path(tmpdir) / jpg_name
-                pix.save(str(jpg_path))
-                written.append((jpg_name, jpg_path))
+            with tempfile.TemporaryDirectory() as tmpdir:
+                written = []
+                for i, page in enumerate(doc):
+                    zoom = dpi / 72.0
+                    matrix = fitz.Matrix(zoom, zoom)
+                    pix = page.get_pixmap(matrix=matrix, alpha=False)
+                    jpg_name = f"page-{i + 1}.jpg"
+                    jpg_path = Path(tmpdir) / jpg_name
+                    pix.save(str(jpg_path))
+                    written.append((jpg_name, jpg_path))
 
             with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
                 for name, path in written:
                     zf.write(path, arcname=name)
+        finally:
+            doc.close()
 
-        doc.close()
+        _check_output_size(zip_path)
 
         job.status = "completed"
         job.output_file = f"outputs/{zip_name}"
@@ -499,12 +534,12 @@ def pdf_to_jpg_task(self, job_id):
         job.status = "failed"
         job.error_message = str(e)
         job.save(update_fields=["status", "error_message"])
-        return {"error": str(e)}
+        raise
 
 
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, autoretry_for=(), max_retries=0)
 def jpg_to_pdf_task(self, job_id):
     """
     Combine multiple images (JPG/PNG) into a single PDF.
@@ -543,9 +578,9 @@ def jpg_to_pdf_task(self, job_id):
         output_name = f"{uuid.uuid4().hex}.pdf"
         output_path = output_dir / output_name
 
-        convert_kwargs = {
-            "outputstream": None,  # set below
-        }
+        # convert_kwargs = {
+        #     "outputstream": None,  # set below
+        # }
 
         with open(output_path, "wb") as f:
             if page_size == "A4":
@@ -594,12 +629,12 @@ def jpg_to_pdf_task(self, job_id):
         job.status = "failed"
         job.error_message = str(e)
         job.save(update_fields=["status", "error_message"])
-        return {"error": str(e)}
+        raise
 
 
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, autoretry_for=(), max_retries=0)
 def protect_pdf_task(self, job_id):
     """
     Add password protection + optional permissions.
@@ -630,10 +665,17 @@ def protect_pdf_task(self, job_id):
         if not input_path.exists():
             raise FileNotFoundError(f"Input file missing: {input_path.name}")
 
-        options = job.options or {}
-        password = options.get("password", "").strip()
-        allow_printing = options.get("allow_printing", True)
-        allow_copying = options.get("allow_copying", True)
+        # Retrieve password from Redis (not from DB)
+        import redis as _redis
+        import os as _os
+
+        r = _redis.from_url(_os.getenv("REDIS_URL", "redis://localhost:6379/0"))
+        redis_key = f"pdf_password:{job.id}"
+        password = (r.get(redis_key) or b"").decode("utf-8").strip()
+        r.delete(redis_key)   # clean up immediately after reading
+
+        allow_printing = (job.options or {}).get("allow_printing", True)
+        allow_copying = (job.options or {}).get("allow_copying", True)
 
         if not password:
             raise ValueError("Password is required.")
@@ -676,12 +718,12 @@ def protect_pdf_task(self, job_id):
         job.status = "failed"
         job.error_message = str(e)
         job.save(update_fields=["status", "error_message"])
-        return {"error": str(e)}
+        raise
 
 
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, autoretry_for=(), max_retries=0)
 def unlock_pdf_task(self, job_id):
     """
     Remove password from a PDF.
@@ -711,8 +753,14 @@ def unlock_pdf_task(self, job_id):
         if not input_path.exists():
             raise FileNotFoundError(f"Input file missing: {input_path.name}")
 
-        options = job.options or {}
-        password = options.get("password", "").strip()
+        # Retrieve password from Redis (not from DB)
+        import redis as _redis
+        import os as _os
+
+        r = _redis.from_url(_os.getenv("REDIS_URL", "redis://localhost:6379/0"))
+        redis_key = f"pdf_password:{job.id}"
+        password = (r.get(redis_key) or b"").decode("utf-8").strip()
+        r.delete(redis_key)
 
         reader = PdfReader(str(input_path))
 
@@ -748,12 +796,12 @@ def unlock_pdf_task(self, job_id):
         job.status = "failed"
         job.error_message = str(e)
         job.save(update_fields=["status", "error_message"])
-        return {"error": str(e)}
+        raise
 
 
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, autoretry_for=(), max_retries=0)
 def watermark_pdf_task(self, job_id):
     """
     Add a text watermark to every page.
@@ -879,12 +927,12 @@ def watermark_pdf_task(self, job_id):
         job.status = "failed"
         job.error_message = str(e)
         job.save(update_fields=["status", "error_message"])
-        return {"error": str(e)}
+        raise
 
 
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, autoretry_for=(), max_retries=0)
 def page_numbers_task(self, job_id):
     """
     Add page numbers to every page.
@@ -1009,12 +1057,12 @@ def page_numbers_task(self, job_id):
         job.status = "failed"
         job.error_message = str(e)
         job.save(update_fields=["status", "error_message"])
-        return {"error": str(e)}
+        raise
 
 
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, autoretry_for=(), max_retries=0)
 def organize_pdf_task(self, job_id):
     """
     Reorder pages based on a new order.
@@ -1096,12 +1144,12 @@ def organize_pdf_task(self, job_id):
         job.status = "failed"
         job.error_message = str(e)
         job.save(update_fields=["status", "error_message"])
-        return {"error": str(e)}
+        raise
 
 
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, autoretry_for=(), max_retries=0)
 def crop_pdf_task(self, job_id):
     """
     Crop PDF pages by trimming margins.
@@ -1200,12 +1248,12 @@ def crop_pdf_task(self, job_id):
         job.status = "failed"
         job.error_message = str(e)
         job.save(update_fields=["status", "error_message"])
-        return {"error": str(e)}
+        raise
 
 
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, autoretry_for=(), max_retries=0)
 def html_to_pdf_task(self, job_id):
     """
     Convert HTML content to PDF.
@@ -1232,6 +1280,27 @@ def html_to_pdf_task(self, job_id):
         if not html_content:
             raise ValueError("HTML content is required.")
 
+        # SSRF guard: strip tags that could load remote resources
+        import re
+        BLOCKED_TAGS = re.compile(
+            r"<\s*(script|iframe|object|embed|link|meta)\b[^>]*>.*?<\s*/\s*\1\s*>",
+            re.IGNORECASE | re.DOTALL,
+        )
+        SELF_CLOSING = re.compile(
+            r"<\s*(script|iframe|object|embed|link|meta)\b[^>]*/?>",
+            re.IGNORECASE,
+        )
+        html_content = BLOCKED_TAGS.sub("", html_content)
+        html_content = SELF_CLOSING.sub("", html_content)
+
+        # Reject URLs that point at localhost/internal addresses
+        FORBIDDEN_URLS = re.compile(
+            r"https?://(localhost|127\.|0\.0\.0\.0|10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|169\.254\.)",
+            re.IGNORECASE,
+        )
+        if FORBIDDEN_URLS.search(html_content):
+            raise ValueError("HTML contains a URL to a restricted address.")
+
         pdf_bytes = ironpress.html_to_pdf(html_content)
 
         output_name = f"{uuid.uuid4().hex}.pdf"
@@ -1250,12 +1319,12 @@ def html_to_pdf_task(self, job_id):
         job.status = "failed"
         job.error_message = str(e)
         job.save(update_fields=["status", "error_message"])
-        return {"error": str(e)}
+        raise
 
 
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, autoretry_for=(), max_retries=0)
 def pdf_to_html_task(self, job_id):
     """
     Extract text from a PDF and produce an HTML file.
@@ -1291,50 +1360,51 @@ def pdf_to_html_task(self, job_id):
             layout = "preserve"
 
         doc = fitz.open(str(input_path))
-        total_pages = len(doc)
+        try:
+            total_pages = _check_page_count(doc)
 
-        if layout == "preserve":
-            # PyMuPDF built-in HTML export — keeps approximate positions
-            html_parts = []
-            for page in doc:
-                html_parts.append(page.get_text("html"))
-            html_output = "\n".join(html_parts)
-        else:
-            # Simple layout — headings + paragraphs
-            body_parts = []
-            for i, page in enumerate(doc):
-                text = page.get_text("text")
-                if not text.strip():
-                    continue
-                body_parts.append(f'<section class="page">')
-                body_parts.append(f'<div class="page-num">Page {i + 1}</div>')
-                for para in text.split("\n\n"):
-                    para = para.strip()
-                    if not para:
+            if layout == "preserve":
+                # PyMuPDF built-in HTML export — keeps approximate positions
+                html_parts = []
+                for page in doc:
+                    html_parts.append(page.get_text("html"))
+                html_output = "\n".join(html_parts)
+            else:
+                # Simple layout — headings + paragraphs
+                body_parts = []
+                for i, page in enumerate(doc):
+                    text = page.get_text("text")
+                    if not text.strip():
                         continue
-                    escaped = html_lib.escape(para)
-                    body_parts.append(f"<p>{escaped}</p>")
-                body_parts.append("</section>")
+                    body_parts.append(f'<section class="page">')
+                    body_parts.append(f'<div class="page-num">Page {i + 1}</div>')
+                    for para in text.split("\n\n"):
+                        para = para.strip()
+                        if not para:
+                            continue
+                        escaped = html_lib.escape(para)
+                        body_parts.append(f"<p>{escaped}</p>")
+                    body_parts.append("</section>")
 
-            html_output = (
-                "<!DOCTYPE html>\n"
-                '<html lang="en">\n<head>\n'
-                '<meta charset="utf-8">\n'
-                "<title>Converted PDF</title>\n"
-                "<style>\n"
-                "body { font-family: Georgia, serif; max-width: 800px; "
-                "margin: 2rem auto; padding: 1rem; line-height: 1.6; }\n"
-                ".page { margin-bottom: 3rem; padding-bottom: 2rem; "
-                "border-bottom: 1px solid #eee; }\n"
-                ".page-num { color: #888; font-size: 0.8em; "
-                "text-transform: uppercase; letter-spacing: 0.05em; "
-                "margin-bottom: 1rem; }\n"
-                "</style>\n</head>\n<body>\n"
-                + "\n".join(body_parts)
-                + "\n</body>\n</html>"
-            )
-
-        doc.close()
+                html_output = (
+                    "<!DOCTYPE html>\n"
+                    '<html lang="en">\n<head>\n'
+                    '<meta charset="utf-8">\n'
+                    "<title>Converted PDF</title>\n"
+                    "<style>\n"
+                    "body { font-family: Georgia, serif; max-width: 800px; "
+                    "margin: 2rem auto; padding: 1rem; line-height: 1.6; }\n"
+                    ".page { margin-bottom: 3rem; padding-bottom: 2rem; "
+                    "border-bottom: 1px solid #eee; }\n"
+                    ".page-num { color: #888; font-size: 0.8em; "
+                    "text-transform: uppercase; letter-spacing: 0.05em; "
+                    "margin-bottom: 1rem; }\n"
+                    "</style>\n</head>\n<body>\n"
+                    + "\n".join(body_parts)
+                    + "\n</body>\n</html>"
+                )
+        finally:
+            doc.close()
 
         output_name = f"{uuid.uuid4().hex}.html"
         output_path = output_dir / output_name
@@ -1357,12 +1427,13 @@ def pdf_to_html_task(self, job_id):
         job.status = "failed"
         job.error_message = str(e)
         job.save(update_fields=["status", "error_message"])
-        return {"error": str(e)}
+        # Re-raise so Celery marks this task as FAILED (visible in monitoring)
+        raise
 
 
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, autoretry_for=(), max_retries=0)
 def markdown_to_pdf_task(self, job_id):
     """
     Convert Markdown to PDF.
@@ -1406,12 +1477,12 @@ def markdown_to_pdf_task(self, job_id):
         job.status = "failed"
         job.error_message = str(e)
         job.save(update_fields=["status", "error_message"])
-        return {"error": str(e)}
+        raise
 
 
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, autoretry_for=(), max_retries=0)
 def pdf_to_markdown_task(self, job_id):
     """
     Extract content from a PDF and produce a Markdown file.
@@ -1446,25 +1517,26 @@ def pdf_to_markdown_task(self, job_id):
             layout = "preserve"
 
         doc = fitz.open(str(input_path))
-        total_pages = len(doc)
+        total_pages = _check_page_count(doc)
 
         md_parts = []
 
-        if layout == "preserve":
-            # PyMuPDF built-in markdown export — keeps headings, tables, links
-            for page in doc:
-                md_parts.append(page.get_text("markdown"))
-        else:
-            # Simple layout — plain text per page with page separators
-            for i, page in enumerate(doc):
-                text = page.get_text("text").strip()
-                if not text:
-                    continue
-                md_parts.append(f"## Page {i + 1}\n")
-                md_parts.append(text)
-                md_parts.append("")
-
-        doc.close()
+        try:
+            if layout == "preserve":
+                # PyMuPDF built-in markdown export — keeps headings, tables, links
+                for page in doc:
+                    md_parts.append(page.get_text("markdown"))
+            else:
+                # Simple layout — plain text per page with page separators
+                for i, page in enumerate(doc):
+                    text = page.get_text("text").strip()
+                    if not text:
+                        continue
+                    md_parts.append(f"## Page {i + 1}\n")
+                    md_parts.append(text)
+                    md_parts.append("")
+        finally:
+            doc.close()
 
         md_output = "\n\n".join(md_parts).strip()
         if not md_output:
@@ -1494,4 +1566,4 @@ def pdf_to_markdown_task(self, job_id):
         job.status = "failed"
         job.error_message = str(e)
         job.save(update_fields=["status", "error_message"])
-        return {"error": str(e)}
+        raise

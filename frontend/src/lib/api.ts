@@ -1,6 +1,17 @@
 const API_BASE_URL =
     process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
 
+// Warn if using the fallback in production
+if (
+    process.env.NODE_ENV === "production" &&
+    !process.env.NEXT_PUBLIC_API_URL
+) {
+    console.warn(
+        "[GrayPDF] NEXT_PUBLIC_API_URL is not set — falling back to localhost. " +
+        "This will break in production."
+    );
+}
+
 export class ApiError extends Error {
     status: number;
     constructor(message: string, status: number) {
@@ -62,8 +73,9 @@ function isNoRefreshEndpoint(url: string): boolean {
         url.includes("/auth/login/") ||
         url.includes("/auth/register/") ||
         url.includes("/auth/refresh/") ||
-        url.includes("/auth/logout/") ||
-        url.includes("/auth/me/")
+        url.includes("/auth/logout/")
+        // NOTE: /auth/me/ IS allowed to trigger refresh now.
+        // The single-flight lock in tryRefresh() prevents loops.
     );
 }
 
@@ -73,6 +85,8 @@ async function doFetch(url: string, options: RequestInit): Promise<Response> {
     if (res.status === 401 && !isNoRefreshEndpoint(url)) {
         const refreshed = await tryRefresh();
         if (refreshed) {
+            // Retry ONCE. If it still fails, we won't refresh again —
+            // the response is returned as-is (likely 401 if the new token is also bad).
             res = await fetchWithTimeout(url, options);
         }
     }
