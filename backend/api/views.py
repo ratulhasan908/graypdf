@@ -72,6 +72,28 @@ def _enqueue_job(task, job):
         job.save(update_fields=["status", "error_message"])
 
 
+def _validate_upload_sizes(files):
+    max_file_size = settings.MAX_UPLOAD_FILE_SIZE
+    max_total_size = settings.MAX_TOTAL_UPLOAD_SIZE
+
+    for uploaded_file in files:
+        if uploaded_file.size > max_file_size:
+            limit_mb = max_file_size // (1024 * 1024)
+            return Response(
+                {"detail": f"Each file must be {limit_mb} MB or smaller."},
+                status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            )
+
+    if sum(uploaded_file.size for uploaded_file in files) > max_total_size:
+        limit_mb = max_total_size // (1024 * 1024)
+        return Response(
+            {"detail": f"Combined file size must be {limit_mb} MB or smaller."},
+            status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+        )
+
+    return None
+
+
 # ---------- Auth endpoints ----------
 
 @api_view(["GET"])
@@ -180,6 +202,9 @@ def merge_pdf(request):
     from .tasks import merge_pdf_task
 
     files = request.FILES.getlist("files")
+    size_error = _validate_upload_sizes(files)
+    if size_error:
+        return size_error
     if not files:
         return Response(
             {"detail": "No files uploaded."},
@@ -191,11 +216,22 @@ def merge_pdf(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    for uploaded_file in files:
+        if not uploaded_file.name.lower().endswith(".pdf"):
+            return Response(
+                {"detail": f"{uploaded_file.name} is not a PDF file."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
     # Rate limit check
     if request.user.is_authenticated:
-        allowed, used, limit = check_and_increment_user(request.user)
+        allowed, used, limit = check_and_increment_user(
+            request.user, increment_by=len(files)
+        )
     else:
-        allowed, used, limit = check_and_increment_guest(request)
+        allowed, used, limit = check_and_increment_guest(
+            request, increment_by=len(files)
+        )
 
     if not allowed:
         return Response(
@@ -214,12 +250,6 @@ def merge_pdf(request):
 
     saved_names = []
     for f in files:
-        if not f.name.lower().endswith(".pdf"):
-            return Response(
-                {"detail": f"{f.name} is not a PDF file."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
         filename = f"{uuid.uuid4().hex}.pdf"
         filepath = upload_dir / filename
         with open(filepath, "wb+") as dest:
@@ -311,7 +341,7 @@ def job_download(request, job_id):
         mime = "application/zip"
     elif job.tool == "pdf-to-html":
         extension = "html"
-        mime = "text/html"
+        mime = "text/html; charset=utf-8"
     elif job.tool == "pdf-to-markdown":
         extension = "md"
         mime = "text/markdown"
@@ -339,6 +369,9 @@ def split_pdf(request):
     from .tasks import split_pdf_task
 
     files = request.FILES.getlist("files")
+    size_error = _validate_upload_sizes(files)
+    if size_error:
+        return size_error
     if len(files) != 1:
         return Response(
             {"detail": "Please upload exactly 1 PDF file."},
@@ -416,6 +449,9 @@ def compress_pdf(request):
     from .tasks import compress_pdf_task
 
     files = request.FILES.getlist("files")
+    size_error = _validate_upload_sizes(files)
+    if size_error:
+        return size_error
     if len(files) != 1:
         return Response(
             {"detail": "Please upload exactly 1 PDF file."},
@@ -431,9 +467,13 @@ def compress_pdf(request):
 
     # Rate limit
     if request.user.is_authenticated:
-        allowed, used, limit = check_and_increment_user(request.user)
+        allowed, used, limit = check_and_increment_user(
+            request.user, increment_by=len(files)
+        )
     else:
-        allowed, used, limit = check_and_increment_guest(request)
+        allowed, used, limit = check_and_increment_guest(
+            request, increment_by=len(files)
+        )
 
     if not allowed:
         return Response(
@@ -484,6 +524,9 @@ def rotate_pdf(request):
     from .tasks import rotate_pdf_task
 
     files = request.FILES.getlist("files")
+    size_error = _validate_upload_sizes(files)
+    if size_error:
+        return size_error
     if len(files) != 1:
         return Response(
             {"detail": "Please upload exactly 1 PDF file."},
@@ -558,6 +601,9 @@ def pdf_to_jpg(request):
     from .tasks import pdf_to_jpg_task
 
     files = request.FILES.getlist("files")
+    size_error = _validate_upload_sizes(files)
+    if size_error:
+        return size_error
     if len(files) != 1:
         return Response(
             {"detail": "Please upload exactly 1 PDF file."},
@@ -630,6 +676,9 @@ def jpg_to_pdf(request):
     from .tasks import jpg_to_pdf_task
 
     files = request.FILES.getlist("files")
+    size_error = _validate_upload_sizes(files)
+    if size_error:
+        return size_error
     if not files:
         return Response(
             {"detail": "No files uploaded."},
@@ -646,9 +695,13 @@ def jpg_to_pdf(request):
 
     # Rate limit
     if request.user.is_authenticated:
-        allowed, used, limit = check_and_increment_user(request.user)
+        allowed, used, limit = check_and_increment_user(
+            request.user, increment_by=len(files)
+        )
     else:
-        allowed, used, limit = check_and_increment_guest(request)
+        allowed, used, limit = check_and_increment_guest(
+            request, increment_by=len(files)
+        )
 
     if not allowed:
         return Response(
@@ -705,6 +758,9 @@ def protect_pdf(request):
     from .tasks import protect_pdf_task
 
     files = request.FILES.getlist("files")
+    size_error = _validate_upload_sizes(files)
+    if size_error:
+        return size_error
     if len(files) != 1:
         return Response(
             {"detail": "Please upload exactly 1 PDF file."},
@@ -797,6 +853,9 @@ def unlock_pdf(request):
     from .tasks import unlock_pdf_task
 
     files = request.FILES.getlist("files")
+    size_error = _validate_upload_sizes(files)
+    if size_error:
+        return size_error
     if len(files) != 1:
         return Response(
             {"detail": "Please upload exactly 1 PDF file."},
@@ -870,6 +929,9 @@ def watermark_pdf(request):
     from .tasks import watermark_pdf_task
 
     files = request.FILES.getlist("files")
+    size_error = _validate_upload_sizes(files)
+    if size_error:
+        return size_error
     if len(files) != 1:
         return Response(
             {"detail": "Please upload exactly 1 PDF file."},
@@ -966,6 +1028,9 @@ def page_numbers(request):
     from .tasks import page_numbers_task
 
     files = request.FILES.getlist("files")
+    size_error = _validate_upload_sizes(files)
+    if size_error:
+        return size_error
     if len(files) != 1:
         return Response(
             {"detail": "Please upload exactly 1 PDF file."},
@@ -1057,6 +1122,9 @@ def organize_pdf(request):
     from .tasks import organize_pdf_task
 
     files = request.FILES.getlist("files")
+    size_error = _validate_upload_sizes(files)
+    if size_error:
+        return size_error
     if len(files) != 1:
         return Response(
             {"detail": "Please upload exactly 1 PDF file."},
@@ -1148,6 +1216,9 @@ def pdf_page_count(request):
     from pypdf import PdfReader
 
     files = request.FILES.getlist("files")
+    size_error = _validate_upload_sizes(files)
+    if size_error:
+        return size_error
     if len(files) != 1:
         return Response(
             {"detail": "Please upload exactly 1 PDF file."},
@@ -1200,6 +1271,9 @@ def crop_pdf(request):
     from .tasks import crop_pdf_task
 
     files = request.FILES.getlist("files")
+    size_error = _validate_upload_sizes(files)
+    if size_error:
+        return size_error
     if len(files) != 1:
         return Response(
             {"detail": "Please upload exactly 1 PDF file."},
@@ -1214,17 +1288,13 @@ def crop_pdf(request):
         )
 
     # Rate limit
-    # Count each uploaded file as one unit
     file_count = len(files)
     if request.user.is_authenticated:
         allowed, used, limit = check_and_increment_user(request.user, increment_by=file_count)
     else:
-        # Guest: increment per-file too (call N times)
-        allowed = True
-        for _ in range(file_count):
-            allowed, used, limit = check_and_increment_guest(request)
-            if not allowed:
-                break
+        allowed, used, limit = check_and_increment_guest(
+            request, increment_by=file_count
+        )
 
     if not allowed:
         return Response(
@@ -1375,6 +1445,9 @@ def pdf_to_html(request):
     from .tasks import pdf_to_html_task
 
     files = request.FILES.getlist("files")
+    size_error = _validate_upload_sizes(files)
+    if size_error:
+        return size_error
     if len(files) != 1:
         return Response(
             {"detail": "Please upload exactly 1 PDF file."},
@@ -1405,9 +1478,9 @@ def pdf_to_html(request):
             status=status.HTTP_429_TOO_MANY_REQUESTS,
         )
 
-    layout = request.data.get("layout", "preserve")
+    layout = request.data.get("layout", "simple")
     if layout not in ("simple", "preserve"):
-        layout = "preserve"
+        layout = "simple"
 
     upload_dir = Path(settings.MEDIA_ROOT) / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
@@ -1490,6 +1563,9 @@ def pdf_to_markdown(request):
     from .tasks import pdf_to_markdown_task
 
     files = request.FILES.getlist("files")
+    size_error = _validate_upload_sizes(files)
+    if size_error:
+        return size_error
     if len(files) != 1:
         return Response(
             {"detail": "Please upload exactly 1 PDF file."},

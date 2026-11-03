@@ -14,7 +14,8 @@ import {
     Sparkles,
     FlipVertical,
 } from "lucide-react";
-import { apiUpload, apiFetch } from "@/lib/api";
+import type { LucideIcon } from "lucide-react";
+import { apiUpload, apiFetch, getErrorMessage} from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import ToolLayout from "@/components/ToolLayout";
 
@@ -34,7 +35,7 @@ const ANGLES: {
     id: Angle;
     label: string;
     sub: string;
-    Icon: any;
+    Icon: LucideIcon;
 }[] = [
         { id: 90, label: "90°", sub: "Clockwise", Icon: RotateCw },
         { id: 180, label: "180°", sub: "Upside down", Icon: FlipVertical },
@@ -103,10 +104,10 @@ export default function RotatePdfPage() {
                     stopPolling();
                     setLoading(false);
                 }
-            } catch (err: any) {
+            } catch (err: unknown) {
                 stopPolling();
                 setLoading(false);
-                setError(err.message || "Failed to check job status.");
+                setError(getErrorMessage(err, "Failed to check job status."));
             }
         }, 2000);
     }
@@ -140,8 +141,8 @@ export default function RotatePdfPage() {
             } else {
                 startPolling(result.id);
             }
-        } catch (err: any) {
-            setError(err.message || "Rotate failed.");
+        } catch (err: unknown) {
+            setError(getErrorMessage(err, "Rotate failed."));
             setLoading(false);
         }
     }

@@ -3,6 +3,7 @@
 import {
     createContext,
     useContext,
+    useCallback,
     useEffect,
     useState,
     ReactNode,
@@ -58,14 +59,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
     }
 
-    async function refreshUsage() {
+    const refreshUsage = useCallback(async () => {
         try {
             const data = await apiFetch<Usage>("/usage/");
             setUsage(data);
         } catch {
             // ignore
         }
-    }
+    }, []);
 
     useEffect(() => {
         let cancelled = false;
@@ -77,7 +78,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return () => {
             cancelled = true;
         };
-    }, []);
+    }, [refreshUsage]);
 
     async function login(email: string, password: string) {
         const data = await apiFetch<User>("/auth/login/", {

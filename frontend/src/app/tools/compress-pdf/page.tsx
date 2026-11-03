@@ -13,7 +13,7 @@ import {
     Sparkles,
     TrendingDown,
 } from "lucide-react";
-import { apiUpload, apiFetch } from "@/lib/api";
+import { apiUpload, apiFetch, getErrorMessage} from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import ToolLayout from "@/components/ToolLayout";
 
@@ -24,7 +24,11 @@ type Job = {
     output_file: string | null;
     download_url: string | null;
     error_message: string | null;
-    options?: Record<string, any>;
+    options?: {
+        original_size?: number;
+        compressed_size?: number;
+        savings_percent?: number;
+    };
 };
 
 type Quality = "screen" | "ebook" | "printer" | "prepress";
@@ -118,10 +122,10 @@ export default function CompressPdfPage() {
                     stopPolling();
                     setLoading(false);
                 }
-            } catch (err: any) {
+            } catch (err: unknown) {
                 stopPolling();
                 setLoading(false);
-                setError(err.message || "Failed to check job status.");
+                setError(getErrorMessage(err, "Failed to check job status."));
             }
         }, 2000);
     }
@@ -149,8 +153,8 @@ export default function CompressPdfPage() {
             } else {
                 startPolling(result.id);
             }
-        } catch (err: any) {
-            setError(err.message || "Compress failed.");
+        } catch (err: unknown) {
+            setError(getErrorMessage(err, "Compress failed."));
             setLoading(false);
         }
     }

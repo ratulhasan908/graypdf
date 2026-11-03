@@ -3,9 +3,10 @@
 import Link from "next/link";
 import { ReactNode } from "react";
 import { ArrowLeft } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 
 type ToolLayoutProps = {
-    icon: any; // Lucide icon component
+    icon: LucideIcon;
     title: string;
     description: string;
     color: string; // gradient classes e.g. "from-blue-500 to-blue-600"

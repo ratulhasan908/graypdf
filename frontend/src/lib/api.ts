@@ -21,6 +21,10 @@ export class ApiError extends Error {
     }
 }
 
+export function getErrorMessage(error: unknown, fallback: string): string {
+    return error instanceof Error && error.message ? error.message : fallback;
+}
+
 // Single-flight lock: only one refresh in-flight at a time
 let refreshPromise: Promise<boolean> | null = null;
 const REQUEST_TIMEOUT_MS = 15000;

@@ -16,12 +16,13 @@ import {
     FileType,
     FileText,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 
 export type Tool = {
     slug: string;
     name: string;
     description: string;
-    icon: any; // Lucide icon component
+    icon: LucideIcon;
     color: string; // Tailwind gradient classes
     glow: string; // rgba for glow effects
     available: boolean;

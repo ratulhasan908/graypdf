@@ -57,7 +57,7 @@ export default function Home() {
             <h1 className="text-5xl sm:text-6xl md:text-7xl font-bold tracking-tight text-[#010736] mb-6 animate-fade-in leading-[1.05]">
               Every PDF tool
               <br />
-              <span className="gradient-text">you'll ever need</span>
+              <span className="gradient-text">              you&apos;ll ever need</span>
             </h1>
 
             {/* Subtitle */}
@@ -166,21 +166,10 @@ export default function Home() {
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
           {filteredTools.map((tool, i) => {
             const Icon = tool.icon;
-            const CardWrapper = tool.available ? Link : "div";
-            const wrapperProps = tool.available
-              ? { href: `/tools/${tool.slug}` }
-              : {};
-
-            return (
-              <CardWrapper
-                key={tool.slug}
-                {...(wrapperProps as any)}
-                className={`card card-hover p-5 text-left animate-fade-in group ${tool.available
-                    ? ""
-                    : "opacity-50 cursor-not-allowed"
-                  }`}
-                style={{ animationDelay: `${i * 40}ms` }}
-              >
+            const cardClassName = `card card-hover p-5 text-left animate-fade-in group ${tool.available ? "" : "opacity-50 cursor-not-allowed"}`;
+            const cardStyle = { animationDelay: `${i * 40}ms` };
+            const cardContent = (
+              <>
                 <div className="relative mb-4">
                   <div
                     className={`w-12 h-12 rounded-xl bg-gradient-to-br ${tool.color} flex items-center justify-center shadow-md transition-all duration-300 group-hover:scale-110`}
@@ -206,7 +195,26 @@ export default function Home() {
                     <ArrowRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
                   </div>
                 )}
-              </CardWrapper>
+              </>
+            );
+
+            return tool.available ? (
+              <Link
+                key={tool.slug}
+                href={`/tools/${tool.slug}`}
+                className={cardClassName}
+                style={cardStyle}
+              >
+                {cardContent}
+              </Link>
+            ) : (
+              <div
+                key={tool.slug}
+                className={cardClassName}
+                style={cardStyle}
+              >
+                {cardContent}
+              </div>
             );
           })}
         </div>

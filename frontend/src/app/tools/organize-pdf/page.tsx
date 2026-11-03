@@ -14,7 +14,7 @@ import {
     Copy,
     GripVertical,
 } from "lucide-react";
-import { apiUpload, apiFetch } from "@/lib/api";
+import { apiUpload, apiFetch, getErrorMessage} from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import ToolLayout from "@/components/ToolLayout";
 
@@ -61,8 +61,8 @@ export default function OrganizePdfPage() {
             );
             setTotalPages(res.pages);
             setOrder(Array.from({ length: res.pages }, (_, i) => i + 1));
-        } catch (err: any) {
-            setError(err.message || "Could not read PDF.");
+        } catch (err: unknown) {
+            setError(getErrorMessage(err, "Could not read PDF."));
             setFile(null);
         } finally {
             setReadingPdf(false);
@@ -136,10 +136,10 @@ export default function OrganizePdfPage() {
                     stopPolling();
                     setLoading(false);
                 }
-            } catch (err: any) {
+            } catch (err: unknown) {
                 stopPolling();
                 setLoading(false);
-                setError(err.message || "Failed to check job status.");
+                setError(getErrorMessage(err, "Failed to check job status."));
             }
         }, 2000);
     }
@@ -172,8 +172,8 @@ export default function OrganizePdfPage() {
             } else {
                 startPolling(result.id);
             }
-        } catch (err: any) {
-            setError(err.message || "Organize failed.");
+        } catch (err: unknown) {
+            setError(getErrorMessage(err, "Organize failed."));
             setLoading(false);
         }
     }

@@ -13,8 +13,15 @@ from datetime import datetime, timezone
 import redis
 from django.conf import settings
 from django.db import transaction
+from rest_framework.exceptions import APIException
 
 logger = logging.getLogger(__name__)
+
+
+class RateLimitUnavailable(APIException):
+    status_code = 503
+    default_detail = "Usage limits are temporarily unavailable. Please try again."
+    default_code = "rate_limit_unavailable"
 
 
 def _get_redis():
@@ -59,37 +66,46 @@ def _utc_day_key():
     return _utc_today().isoformat()
 
 
-def check_and_increment_guest(request):
+def check_and_increment_guest(request, increment_by=1):
     """
     For guests. Returns (allowed: bool, used: int, limit: int).
 
-    Fails OPEN on Redis errors — we'd rather process a file than 500
-    because of Redis hiccups. Logged loudly.
+    Raises a 503 if Redis is unavailable so guest limits cannot be bypassed.
     """
     limit = getattr(settings, "GUEST_DAILY_LIMIT", 5)
+    if increment_by < 1:
+        raise ValueError("increment_by must be positive.")
+
     ip = _get_client_ip(request)
     day = _utc_day_key()
     key = f"guest_usage:{ip}:{day}"
 
     try:
         r = _get_redis()
-        used = r.incr(key)
-        # Set expiry only on the first increment — atomic enough for our purposes
-        if used == 1:
-            r.expire(key, 60 * 60 * 25)  # ~25 hours
+        allowed, used = r.eval(
+            """
+            local current = tonumber(redis.call('GET', KEYS[1]) or '0')
+            local increment = tonumber(ARGV[1])
+            local limit = tonumber(ARGV[2])
+            if current + increment > limit then
+                return {0, current}
+            end
+            local updated = redis.call('INCRBY', KEYS[1], increment)
+            redis.call('EXPIRE', KEYS[1], ARGV[3])
+            return {1, updated}
+            """,
+            1,
+            key,
+            increment_by,
+            limit,
+            60 * 60 * 25,
+        )
+        allowed = bool(allowed)
     except redis.RedisError as e:
         logger.error("Redis error in guest rate limit: %s", e)
-        # Fail open — allow the request.
-        return True, 0, limit
+        raise RateLimitUnavailable() from e
 
-    if used > limit:
-        try:
-            r.decr(key)
-        except redis.RedisError:
-            pass
-        return False, used - 1, limit
-
-    return True, used, limit
+    return allowed, int(used), limit
 
 
 def check_and_increment_user(user, increment_by=1):
@@ -101,6 +117,8 @@ def check_and_increment_user(user, increment_by=1):
     """
     limit = getattr(settings, "USER_DAILY_LIMIT", 999999)
     today = _utc_today()
+    if increment_by < 1:
+        raise ValueError("increment_by must be positive.")
 
     from .models import User  # avoid circular import
 
@@ -113,7 +131,7 @@ def check_and_increment_user(user, increment_by=1):
             locked.daily_upload_count = 0
             locked.last_upload_reset = today
 
-        if locked.daily_upload_count >= limit:
+        if locked.daily_upload_count + increment_by > limit:
             locked.save(update_fields=["daily_upload_count", "last_upload_reset"])
             return False, locked.daily_upload_count, limit
 
@@ -155,8 +173,12 @@ def get_usage(request):
     try:
         r = _get_redis()
         used = int(r.get(key) or 0)
-    except (redis.RedisError, ValueError):
-        used = 0
+    except redis.RedisError as e:
+        logger.error("Redis error reading guest usage: %s", e)
+        raise RateLimitUnavailable() from e
+    except ValueError as e:
+        logger.error("Invalid guest usage value in Redis: %s", e)
+        raise RateLimitUnavailable() from e
 
     return {
         "used": used,

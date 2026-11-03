@@ -98,7 +98,7 @@ export default function DashboardPage() {
             refreshUsage();
             fetchJobs();
         }
-    }, [user]);
+    }, [user, refreshUsage]);
 
     async function fetchJobs() {
         setLoadingJobs(true);
@@ -130,8 +130,7 @@ export default function DashboardPage() {
 
     const dailyUsed = usage?.used ?? 0;
     const dailyLimit = usage?.limit ?? 20;
-    const isUnlimited = dailyLimit >= 20000; // Treat 20,000+ as unlimited
-    const dailyPercent = isUnlimited ? 0 : Math.min(100, (dailyUsed / dailyLimit) * 100);
+    const dailyPercent = Math.min(100, (dailyUsed / dailyLimit) * 100);
 
     return (
         <main className="min-h-screen mesh-bg grain relative px-4 py-10">
@@ -215,28 +214,19 @@ export default function DashboardPage() {
                         </p>
                         <p className="text-3xl font-bold text-[#010736] mb-3">
                             {dailyUsed}
-                            {!isUnlimited && (
-                                <span className="text-lg text-[#0D1C42]/40"> / {dailyLimit}</span>
-                            )}
+                            <span className="text-lg text-[#0D1C42]/40"> / {dailyLimit}</span>
                         </p>
-                        {isUnlimited ? (
-                            <div className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-1 rounded-full">
-                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                                Unlimited
-                            </div>
-                        ) : (
-                            <div className="w-full bg-[#FCF1D0] rounded-full h-2 overflow-hidden border border-[#e5dcb8]">
-                                <div
-                                    className={`h-full rounded-full transition-all duration-500 ${dailyPercent >= 100
-                                        ? "bg-gradient-to-r from-red-500 to-red-600"
-                                        : dailyPercent >= 80
-                                            ? "bg-gradient-to-r from-amber-400 to-amber-500"
-                                            : "bg-gradient-to-r from-[#0D1C42] to-[#22396F]"
-                                        }`}
-                                    style={{ width: `${dailyPercent}%` }}
-                                />
-                            </div>
-                        )}
+                        <div className="w-full bg-[#FCF1D0] rounded-full h-2 overflow-hidden border border-[#e5dcb8]">
+                            <div
+                                className={`h-full rounded-full transition-all duration-500 ${dailyPercent >= 100
+                                    ? "bg-gradient-to-r from-red-500 to-red-600"
+                                    : dailyPercent >= 80
+                                        ? "bg-gradient-to-r from-amber-400 to-amber-500"
+                                        : "bg-gradient-to-r from-[#0D1C42] to-[#22396F]"
+                                    }`}
+                                style={{ width: `${dailyPercent}%` }}
+                            />
+                        </div>
                     </div>
 
                     <div className="card p-6">
@@ -257,7 +247,7 @@ export default function DashboardPage() {
                             {user.is_premium ? "Premium" : "Free"}
                         </p>
                         <p className="text-xs text-[#0D1C42]/50 mt-3">
-                            Unlimited files
+                            {dailyLimit} files per day
                         </p>
                     </div>
                 </div>

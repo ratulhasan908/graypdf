@@ -14,7 +14,7 @@ import {
     Ruler,
     Layout,
 } from "lucide-react";
-import { apiUpload, apiFetch } from "@/lib/api";
+import { apiUpload, apiFetch, getErrorMessage} from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import ToolLayout from "@/components/ToolLayout";
 
@@ -115,10 +115,10 @@ export default function CropPdfPage() {
                     stopPolling();
                     setLoading(false);
                 }
-            } catch (err: any) {
+            } catch (err: unknown) {
                 stopPolling();
                 setLoading(false);
-                setError(err.message || "Failed to check job status.");
+                setError(getErrorMessage(err, "Failed to check job status."));
             }
         }, 2000);
     }
@@ -156,8 +156,8 @@ export default function CropPdfPage() {
             } else {
                 startPolling(result.id);
             }
-        } catch (err: any) {
-            setError(err.message || "Crop failed.");
+        } catch (err: unknown) {
+            setError(getErrorMessage(err, "Crop failed."));
             setLoading(false);
         }
     }

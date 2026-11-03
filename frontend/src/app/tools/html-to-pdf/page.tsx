@@ -12,7 +12,7 @@ import {
     Wand2,
     FileCode,
 } from "lucide-react";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, getErrorMessage} from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import ToolLayout from "@/components/ToolLayout";
 
@@ -63,10 +63,10 @@ export default function HtmlToPdfPage() {
                     stopPolling();
                     setLoading(false);
                 }
-            } catch (err: any) {
+            } catch (err: unknown) {
                 stopPolling();
                 setLoading(false);
-                setError(err.message || "Failed to check job status.");
+                setError(getErrorMessage(err, "Failed to check job status."));
             }
         }, 2000);
     }
@@ -94,8 +94,8 @@ export default function HtmlToPdfPage() {
             } else {
                 startPolling(result.id);
             }
-        } catch (err: any) {
-            setError(err.message || "Conversion failed.");
+        } catch (err: unknown) {
+            setError(getErrorMessage(err, "Conversion failed."));
             setLoading(false);
         }
     }

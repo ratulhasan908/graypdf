@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ArrowRight, Mail, Lock, Sparkles } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
+import { ApiError } from "@/lib/api";
 
 export default function LoginPage() {
     const router = useRouter();
@@ -22,12 +23,12 @@ export default function LoginPage() {
         try {
             await login(email, password);
             router.push("/dashboard");
-        } catch (err: any) {
-            if (err.status === 401) {
+        } catch (err: unknown) {
+            if (err instanceof ApiError && err.status === 401) {
                 setError("Incorrect email or password.");
-            } else if (err.status === 429) {
+            } else if (err instanceof ApiError && err.status === 429) {
                 setError("Too many attempts. Please try again later.");
-            } else if (err.status === 400) {
+            } else if (err instanceof ApiError && err.status === 400) {
                 setError(err.message || "Invalid login details.");
             } else {
                 setError("Could not log in. Please try again.");

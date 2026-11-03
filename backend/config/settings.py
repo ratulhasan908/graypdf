@@ -66,6 +66,7 @@ INSTALLED_APPS = [
     "allauth.socialaccount.providers.facebook",
     "dj_rest_auth",
     "dj_rest_auth.registration",
+    "rest_framework_simplejwt.token_blacklist",
     # Local
     "api",
 ]
@@ -227,7 +228,7 @@ SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=30),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
     "ROTATE_REFRESH_TOKENS": True,
-    "BLACKLIST_AFTER_ROTATION": False,
+    "BLACKLIST_AFTER_ROTATION": True,
     "UPDATE_LAST_LOGIN": False,
     "AUTH_HEADER_TYPES": ("Bearer",),
 }
@@ -272,6 +273,8 @@ FILE_RETENTION_HOURS = 2
 MAX_PDF_PAGES = 500
 MAX_PROCESSING_SECONDS = 120
 MAX_OUTPUT_SIZE_MB = 200
+MAX_UPLOAD_FILE_SIZE = 50 * 1024 * 1024
+MAX_TOTAL_UPLOAD_SIZE = 200 * 1024 * 1024
 
 
 # ============================================================================
@@ -279,7 +282,7 @@ MAX_OUTPUT_SIZE_MB = 200
 # ============================================================================
 
 GUEST_DAILY_LIMIT = 5
-USER_DAILY_LIMIT = 20000
+USER_DAILY_LIMIT = 20
 
 # Number of trusted reverse proxies in front of Django.
 # Set to 1 for a single nginx/Cloudflare setup; leave 0 in dev.

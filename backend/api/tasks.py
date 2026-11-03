@@ -15,10 +15,10 @@ def _check_page_count(reader_or_doc, context="PDF"):
     Works with both pypdf PdfReader and fitz Document.
     """
     max_pages = getattr(settings, "MAX_PDF_PAGES", 500)
-    try:
-        count = len(reader_or_doc.pages)
-    except AttributeError:
-        # fitz uses __len__ on the doc itself
+    pages = getattr(reader_or_doc, "pages", None)
+    if pages is not None and not callable(pages):
+        count = len(pages)
+    else:
         count = len(reader_or_doc)
 
     if count > max_pages:
@@ -40,7 +40,242 @@ def _check_output_size(path, context="Output"):
         raise ValueError(f"{context} is {size_mb:.1f} MB — max is {max_mb} MB.")
 
 
-    
+def _pdf_to_html_document(doc, layout):
+    import base64
+    import html
+    import re
+    from statistics import median
+
+    page_markup = []
+    has_document_title = False
+    for page_number, page in enumerate(doc, start=1):
+        page_width = float(page.rect.width)
+        page_height = float(page.rect.height)
+
+        if layout == "preserve":
+            elements = []
+            page_data = page.get_text("dict")
+            for block in page_data["blocks"]:
+                if block.get("type") == 1 and block.get("image"):
+                    image_ext = block.get("ext", "").lower()
+                    image_mime = {
+                        "jpeg": "image/jpeg",
+                        "jpg": "image/jpeg",
+                        "png": "image/png",
+                        "gif": "image/gif",
+                    }.get(image_ext)
+                    if image_mime:
+                        x0, y0, x1, y1 = block["bbox"]
+                        image_data = base64.b64encode(block["image"]).decode("ascii")
+                        elements.append(
+                            '<img class="pdf-image" '
+                            f'style="left:{x0:.2f}pt;top:{y0:.2f}pt;'
+                            f'width:{x1 - x0:.2f}pt;height:{y1 - y0:.2f}pt" '
+                            f'src="data:{image_mime};base64,{image_data}" '
+                            f'alt="Image from page {page_number}">'
+                        )
+                elif block.get("type") == 0:
+                    for line in block.get("lines", []):
+                        for span in line.get("spans", []):
+                            text = span.get("text", "")
+                            if not text:
+                                continue
+                            x0, y0, x1, y1 = span["bbox"]
+                            flags = span.get("flags", 0)
+                            color = span.get("color", 0)
+                            color_hex = f"#{color & 0xFFFFFF:06x}"
+                            styles = [
+                                f"left:{x0:.2f}pt",
+                                f"top:{y0:.2f}pt",
+                                f"font-size:{max(float(span.get('size', 1)), 1):.2f}pt",
+                                f"color:{color_hex}",
+                            ]
+                            if flags & 16:
+                                styles.append("font-weight:700")
+                            if flags & 2:
+                                styles.append("font-style:italic")
+                            elements.append(
+                                f'<span class="pdf-text" style="{";".join(styles)}">'
+                                f"{html.escape(text)}</span>"
+                            )
+
+            content = "\n".join(elements)
+            page_class = "page page-preserved"
+        else:
+            blocks = []
+            font_sizes = []
+            for block in page.get_text("dict", sort=True)["blocks"]:
+                if block.get("type") == 1 and block.get("image"):
+                    image_ext = block.get("ext", "").lower()
+                    image_mime = {
+                        "jpeg": "image/jpeg",
+                        "jpg": "image/jpeg",
+                        "png": "image/png",
+                        "gif": "image/gif",
+                    }.get(image_ext)
+                    if image_mime:
+                        image_data = base64.b64encode(block["image"]).decode("ascii")
+                        blocks.append(
+                            ("image", "", '<figure><img '
+                             f'src="data:{image_mime};base64,{image_data}" '
+                             f'alt="Image from page {page_number}"></figure>', 0, 0, 1)
+                        )
+                    continue
+                if block.get("type") != 0:
+                    continue
+
+                lines = []
+                styled_lines = []
+                block_sizes = []
+                bold_characters = 0
+                total_characters = 0
+                for line in block.get("lines", []):
+                    plain_parts = []
+                    styled_parts = []
+                    for span in line.get("spans", []):
+                        text = span.get("text", "")
+                        if not text:
+                            continue
+                        plain_parts.append(text)
+                        escaped_text = html.escape(text)
+                        flags = span.get("flags", 0)
+                        if flags & 2:
+                            escaped_text = f"<em>{escaped_text}</em>"
+                        if flags & 16:
+                            escaped_text = f"<strong>{escaped_text}</strong>"
+                        styled_parts.append(escaped_text)
+                        character_count = len(text.strip())
+                        total_characters += character_count
+                        if flags & 16:
+                            bold_characters += character_count
+                        size = float(span.get("size", 0))
+                        if size > 0:
+                            block_sizes.append(size)
+                            font_sizes.extend([size] * max(character_count, 1))
+
+                    plain_line = "".join(plain_parts).strip()
+                    if plain_line:
+                        lines.append(plain_line)
+                        styled_lines.append("".join(styled_parts).strip())
+
+                if not lines:
+                    continue
+                plain_text = " ".join(lines)
+                plain_text = re.sub(r"- (?=[a-z])", "", plain_text)
+                plain_text = re.sub(r"\s+", " ", plain_text).strip()
+                markup = " ".join(styled_lines)
+                markup = re.sub(r"- (?=[a-z])", "", markup)
+                blocks.append(
+                    (
+                        "text",
+                        plain_text,
+                        markup,
+                        median(block_sizes) if block_sizes else 0,
+                        bold_characters / total_characters if total_characters else 0,
+                        len(lines),
+                    )
+                )
+
+            body_size = median(font_sizes) if font_sizes else 10
+            content_parts = []
+            list_items = []
+
+            def flush_list():
+                if list_items:
+                    content_parts.append("<ul>\n" + "\n".join(list_items) + "\n</ul>")
+                    list_items.clear()
+
+            for kind, plain_text, markup, font_size, bold_ratio, line_count in blocks:
+                if kind == "image":
+                    flush_list()
+                    content_parts.append(markup)
+                    continue
+
+                bullet = re.match(r"^\s*[•●▪◦‣*-]\s*(.+)$", plain_text)
+                if bullet:
+                    list_items.append(f"<li>{html.escape(bullet.group(1))}</li>")
+                    continue
+                flush_list()
+
+                letters = [character for character in plain_text if character.isalpha()]
+                is_uppercase_label = (
+                    len(plain_text) <= 90
+                    and bool(letters)
+                    and all(character.isupper() for character in letters)
+                    and bold_ratio >= 0.5
+                )
+                if line_count == 1 and font_size >= body_size * 1.5:
+                    tag = "h2" if has_document_title else "h1"
+                    has_document_title = True
+                elif line_count == 1 and (
+                    font_size >= body_size * 1.2 or is_uppercase_label
+                ):
+                    tag = "h2"
+                else:
+                    tag = "p"
+                content_parts.append(f"<{tag}>{markup}</{tag}>")
+
+            flush_list()
+            content = "\n".join(content_parts)
+            page_class = "page page-readable"
+
+        page_style = (
+            f' style="--page-width:{page_width:.2f}pt;'
+            f'--page-height:{page_height:.2f}pt"'
+            if layout == "preserve"
+            else ""
+        )
+        page_markup.append(
+            f'<section class="{page_class}"{page_style} '
+            f'aria-label="Page {page_number}">\n'
+            f"{content}\n"
+            "</section>"
+        )
+
+    return (
+        "<!doctype html>\n"
+        '<html lang="en">\n'
+        "<head>\n"
+        '  <meta charset="utf-8">\n'
+        '  <meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        "  <title>PDF converted to HTML</title>\n"
+        "  <style>\n"
+        "    :root { color-scheme: light; font-family: Arial, sans-serif; }\n"
+        "    * { box-sizing: border-box; }\n"
+        "    body { margin: 0; padding: 40px 20px; background: #f3f4f6; color: #1f2937; }\n"
+        "    main { max-width: 850px; margin: 0 auto; padding: 48px; background: #fff; "
+        "box-shadow: 0 2px 16px #17203318; }\n"
+        "    .page-readable { line-height: 1.65; overflow-wrap: anywhere; }\n"
+        "    .page-readable + .page-readable { margin-top: 40px; padding-top: 40px; "
+        "border-top: 1px solid #e5e7eb; }\n"
+        "    h1 { margin: 0 0 1.25em; font-size: 2em; line-height: 1.2; color: #111827; }\n"
+        "    h2 { margin: 1.7em 0 .65em; font-size: 1.15em; line-height: 1.3; "
+        "color: #111827; }\n"
+        "    p { margin: 0 0 1em; }\n"
+        "    ul { margin: 0 0 1em; padding-left: 1.5em; }\n"
+        "    li { margin-bottom: .4em; }\n"
+        "    figure { margin: 1.5em 0; }\n"
+        "    figure img { display: block; max-width: 100%; height: auto; }\n"
+        "    .page-preserved { position: relative; width: var(--page-width); "
+        "min-height: var(--page-height); max-width: 100%; margin: 0 auto 24px; "
+        "padding: 0; background: #fff; overflow: hidden; }\n"
+        "    .pdf-text, .pdf-image { position: absolute; }\n"
+        "    .pdf-text { white-space: pre; line-height: 1; transform-origin: left top; }\n"
+        "    .pdf-image { object-fit: fill; }\n"
+        "    @media (max-width: 700px) { body { padding: 12px; } main { padding: 24px; } }\n"
+        "    @media print { body { padding: 0; background: #fff; } "
+        "      main { max-width: none; padding: 0; box-shadow: none; } "
+        "      .page-readable + .page-readable { margin-top: 0; padding-top: 0; "
+        "border-top: 0; break-before: page; } }\n"
+        "  </style>\n"
+        "</head>\n"
+        "<body>\n"
+        "<main>\n"
+        + "\n".join(page_markup)
+        + "\n</main>\n"
+        "</body>\n"
+        "</html>\n"
+    )
 
 @shared_task(bind=True, autoretry_for=(), max_retries=0)
 def merge_pdf_task(self, job_id):
@@ -74,6 +309,11 @@ def merge_pdf_task(self, job_id):
         for path in input_paths:
             reader = PdfReader(str(path))
             total_pages += _check_page_count(reader)
+            if total_pages > getattr(settings, "MAX_PDF_PAGES", 500):
+                raise ValueError(
+                    f"Merged PDF has {total_pages} pages — max allowed is "
+                    f"{settings.MAX_PDF_PAGES}."
+                )
             for page in reader.pages:
                 writer.add_page(page)
 
@@ -83,10 +323,9 @@ def merge_pdf_task(self, job_id):
         with open(output_path, "wb") as out:
             writer.write(out)
 
-        _check_output_size(output_path)
-
         job.status = "completed"
         job.output_file = f"outputs/{output_name}"
+        _check_output_size(Path(settings.MEDIA_ROOT) / job.output_file)
         job.completed_at = timezone.now()
         job.save(update_fields=["status", "output_file", "completed_at"])
 
@@ -113,7 +352,6 @@ def cleanup_old_files():
     and old Job records older than 24 hours.
     """
     from datetime import timedelta
-    from django.utils import timezone
 
     retention_hours = getattr(settings, "FILE_RETENTION_HOURS", 2)
     cutoff = timezone.now() - timedelta(hours=retention_hours)
@@ -132,8 +370,7 @@ def cleanup_old_files():
             if not filepath.is_file():
                 continue
             try:
-                mtime = datetime.fromtimestamp(filepath.stat().st_mtime)
-                if mtime < cutoff.replace(tzinfo=None):
+                if filepath.stat().st_mtime < cutoff.timestamp():
                     os.remove(filepath)
                     deleted_files += 1
             except OSError:
@@ -238,7 +475,8 @@ def split_pdf_task(self, job_id):
 
         job.status = "completed"
         job.output_file = f"outputs/{zip_name}"
-        job.completed_at = datetime.now()
+        _check_output_size(Path(settings.MEDIA_ROOT) / job.output_file)
+        job.completed_at = timezone.now()
         job.save(update_fields=["status", "output_file", "completed_at"])
 
         # Clean up input
@@ -265,6 +503,7 @@ def compress_pdf_task(self, job_id):
     """
     import subprocess
     import shutil
+    from pypdf import PdfReader
 
     try:
         job = Job.objects.get(id=job_id)
@@ -286,6 +525,7 @@ def compress_pdf_task(self, job_id):
         if not input_path.exists():
             raise FileNotFoundError(f"Input file missing: {input_path.name}")
 
+        _check_page_count(PdfReader(str(input_path)))
         quality = (job.options or {}).get("quality", "ebook")
 
         # Ghostscript quality presets
@@ -325,8 +565,6 @@ def compress_pdf_task(self, job_id):
         if not output_path.exists():
             raise RuntimeError("Ghostscript produced no output.")
 
-        _check_output_size(output_path)
-
         original_size = input_path.stat().st_size
         compressed_size = output_path.stat().st_size
         savings = 0
@@ -335,6 +573,7 @@ def compress_pdf_task(self, job_id):
 
         job.status = "completed"
         job.output_file = f"outputs/{output_name}"
+        _check_output_size(Path(settings.MEDIA_ROOT) / job.output_file)
         job.completed_at = timezone.now()
         job.options = {
             **(job.options or {}),
@@ -431,7 +670,8 @@ def rotate_pdf_task(self, job_id):
 
         job.status = "completed"
         job.output_file = f"outputs/{output_name}"
-        job.completed_at = datetime.now()
+        _check_output_size(Path(settings.MEDIA_ROOT) / job.output_file)
+        job.completed_at = timezone.now()
         job.save(update_fields=["status", "output_file", "completed_at"])
 
         try:
@@ -459,7 +699,7 @@ def pdf_to_jpg_task(self, job_id):
     """
     import zipfile
     import tempfile
-    import fitz  # PyMuPDF
+    import pymupdf as fitz
 
     try:
         job = Job.objects.get(id=job_id)
@@ -506,17 +746,16 @@ def pdf_to_jpg_task(self, job_id):
                     pix.save(str(jpg_path))
                     written.append((jpg_name, jpg_path))
 
-            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                for name, path in written:
-                    zf.write(path, arcname=name)
+                with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                    for name, path in written:
+                        zf.write(path, arcname=name)
         finally:
             doc.close()
 
-        _check_output_size(zip_path)
-
         job.status = "completed"
         job.output_file = f"outputs/{zip_name}"
-        job.completed_at = datetime.now()
+        _check_output_size(Path(settings.MEDIA_ROOT) / job.output_file)
+        job.completed_at = timezone.now()
         job.save(update_fields=["status", "output_file", "completed_at"])
 
         try:
@@ -569,6 +808,12 @@ def jpg_to_pdf_task(self, job_id):
             if not p.exists():
                 raise FileNotFoundError(f"Input file missing: {p.name}")
 
+        if len(input_paths) > getattr(settings, "MAX_PDF_PAGES", 500):
+            raise ValueError(
+                f"PDF has {len(input_paths)} pages — max allowed is "
+                f"{settings.MAX_PDF_PAGES}."
+            )
+
         options = job.options or {}
         page_size = options.get("page_size", "auto")
 
@@ -613,7 +858,8 @@ def jpg_to_pdf_task(self, job_id):
 
         job.status = "completed"
         job.output_file = f"outputs/{output_name}"
-        job.completed_at = datetime.now()
+        _check_output_size(Path(settings.MEDIA_ROOT) / job.output_file)
+        job.completed_at = timezone.now()
         job.save(update_fields=["status", "output_file", "completed_at"])
 
         # Clean up inputs
@@ -683,6 +929,7 @@ def protect_pdf_task(self, job_id):
             raise ValueError("Password must be at least 4 characters.")
 
         reader = PdfReader(str(input_path))
+        _check_page_count(reader)
         writer = PdfWriter()
 
         for page in reader.pages:
@@ -704,7 +951,8 @@ def protect_pdf_task(self, job_id):
 
         job.status = "completed"
         job.output_file = f"outputs/{output_name}"
-        job.completed_at = datetime.now()
+        _check_output_size(Path(settings.MEDIA_ROOT) / job.output_file)
+        job.completed_at = timezone.now()
         job.save(update_fields=["status", "output_file", "completed_at"])
 
         try:
@@ -771,6 +1019,7 @@ def unlock_pdf_task(self, job_id):
             if result == 0:
                 raise ValueError("Incorrect password.")
 
+        _check_page_count(reader)
         writer = PdfWriter()
         for page in reader.pages:
             writer.add_page(page)
@@ -782,7 +1031,8 @@ def unlock_pdf_task(self, job_id):
 
         job.status = "completed"
         job.output_file = f"outputs/{output_name}"
-        job.completed_at = datetime.now()
+        _check_output_size(Path(settings.MEDIA_ROOT) / job.output_file)
+        job.completed_at = timezone.now()
         job.save(update_fields=["status", "output_file", "completed_at"])
 
         try:
@@ -860,6 +1110,7 @@ def watermark_pdf_task(self, job_id):
             color = HexColor("#FF0000")
 
         reader = PdfReader(str(input_path))
+        _check_page_count(reader)
         writer = PdfWriter()
 
         for page in reader.pages:
@@ -913,7 +1164,8 @@ def watermark_pdf_task(self, job_id):
 
         job.status = "completed"
         job.output_file = f"outputs/{output_name}"
-        job.completed_at = datetime.now()
+        _check_output_size(Path(settings.MEDIA_ROOT) / job.output_file)
+        job.completed_at = timezone.now()
         job.save(update_fields=["status", "output_file", "completed_at"])
 
         try:
@@ -989,7 +1241,7 @@ def page_numbers_task(self, job_id):
         margin = max(20, min(margin, 100))
 
         reader = PdfReader(str(input_path))
-        total_pages = len(reader.pages)
+        total_pages = _check_page_count(reader)
         writer = PdfWriter()
 
         for idx, page in enumerate(reader.pages):
@@ -1043,7 +1295,8 @@ def page_numbers_task(self, job_id):
 
         job.status = "completed"
         job.output_file = f"outputs/{output_name}"
-        job.completed_at = datetime.now()
+        _check_output_size(Path(settings.MEDIA_ROOT) / job.output_file)
+        job.completed_at = timezone.now()
         job.save(update_fields=["status", "output_file", "completed_at"])
 
         try:
@@ -1100,7 +1353,7 @@ def organize_pdf_task(self, job_id):
             raise ValueError("Page order is required.")
 
         reader = PdfReader(str(input_path))
-        total_pages = len(reader.pages)
+        total_pages = _check_page_count(reader)
 
         # Validate all page numbers
         normalized = []
@@ -1126,7 +1379,8 @@ def organize_pdf_task(self, job_id):
 
         job.status = "completed"
         job.output_file = f"outputs/{output_name}"
-        job.completed_at = datetime.now()
+        _check_output_size(Path(settings.MEDIA_ROOT) / job.output_file)
+        job.completed_at = timezone.now()
         job.save(update_fields=["status", "output_file", "completed_at"])
 
         try:
@@ -1193,7 +1447,7 @@ def crop_pdf_task(self, job_id):
             raise ValueError("Please specify at least one crop amount.")
 
         reader = PdfReader(str(input_path))
-        total_pages = len(reader.pages)
+        total_pages = _check_page_count(reader)
 
         # Determine which pages to crop
         if apply_to == "first":
@@ -1234,7 +1488,8 @@ def crop_pdf_task(self, job_id):
 
         job.status = "completed"
         job.output_file = f"outputs/{output_name}"
-        job.completed_at = datetime.now()
+        _check_output_size(Path(settings.MEDIA_ROOT) / job.output_file)
+        job.completed_at = timezone.now()
         job.save(update_fields=["status", "output_file", "completed_at"])
 
         try:
@@ -1260,7 +1515,9 @@ def html_to_pdf_task(self, job_id):
     Options:
       - html: HTML string
     """
+    import io
     import ironpress
+    from pypdf import PdfReader
 
     try:
         job = Job.objects.get(id=job_id)
@@ -1280,28 +1537,9 @@ def html_to_pdf_task(self, job_id):
         if not html_content:
             raise ValueError("HTML content is required.")
 
-        # SSRF guard: strip tags that could load remote resources
-        import re
-        BLOCKED_TAGS = re.compile(
-            r"<\s*(script|iframe|object|embed|link|meta)\b[^>]*>.*?<\s*/\s*\1\s*>",
-            re.IGNORECASE | re.DOTALL,
-        )
-        SELF_CLOSING = re.compile(
-            r"<\s*(script|iframe|object|embed|link|meta)\b[^>]*/?>",
-            re.IGNORECASE,
-        )
-        html_content = BLOCKED_TAGS.sub("", html_content)
-        html_content = SELF_CLOSING.sub("", html_content)
-
-        # Reject URLs that point at localhost/internal addresses
-        FORBIDDEN_URLS = re.compile(
-            r"https?://(localhost|127\.|0\.0\.0\.0|10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|169\.254\.)",
-            re.IGNORECASE,
-        )
-        if FORBIDDEN_URLS.search(html_content):
-            raise ValueError("HTML contains a URL to a restricted address.")
-
+        # IronPress sanitizes HTML and does not fetch remote HTTP resources.
         pdf_bytes = ironpress.html_to_pdf(html_content)
+        _check_page_count(PdfReader(io.BytesIO(pdf_bytes)))
 
         output_name = f"{uuid.uuid4().hex}.pdf"
         output_path = output_dir / output_name
@@ -1310,7 +1548,8 @@ def html_to_pdf_task(self, job_id):
 
         job.status = "completed"
         job.output_file = f"outputs/{output_name}"
-        job.completed_at = datetime.now()
+        _check_output_size(Path(settings.MEDIA_ROOT) / job.output_file)
+        job.completed_at = timezone.now()
         job.save(update_fields=["status", "output_file", "completed_at"])
 
         return {"status": "completed"}
@@ -1329,10 +1568,9 @@ def pdf_to_html_task(self, job_id):
     """
     Extract text from a PDF and produce an HTML file.
     Options:
-      - layout: "simple" | "preserve" (default: "preserve")
+      - layout: "simple" | "preserve" (default: "simple")
     """
-    import html as html_lib
-    import fitz  # PyMuPDF
+    import pymupdf as fitz
 
     try:
         job = Job.objects.get(id=job_id)
@@ -1355,54 +1593,14 @@ def pdf_to_html_task(self, job_id):
             raise FileNotFoundError(f"Input file missing: {input_path.name}")
 
         options = job.options or {}
-        layout = options.get("layout", "preserve")
+        layout = options.get("layout", "simple")
         if layout not in ("simple", "preserve"):
-            layout = "preserve"
+            layout = "simple"
 
         doc = fitz.open(str(input_path))
         try:
             total_pages = _check_page_count(doc)
-
-            if layout == "preserve":
-                # PyMuPDF built-in HTML export — keeps approximate positions
-                html_parts = []
-                for page in doc:
-                    html_parts.append(page.get_text("html"))
-                html_output = "\n".join(html_parts)
-            else:
-                # Simple layout — headings + paragraphs
-                body_parts = []
-                for i, page in enumerate(doc):
-                    text = page.get_text("text")
-                    if not text.strip():
-                        continue
-                    body_parts.append(f'<section class="page">')
-                    body_parts.append(f'<div class="page-num">Page {i + 1}</div>')
-                    for para in text.split("\n\n"):
-                        para = para.strip()
-                        if not para:
-                            continue
-                        escaped = html_lib.escape(para)
-                        body_parts.append(f"<p>{escaped}</p>")
-                    body_parts.append("</section>")
-
-                html_output = (
-                    "<!DOCTYPE html>\n"
-                    '<html lang="en">\n<head>\n'
-                    '<meta charset="utf-8">\n'
-                    "<title>Converted PDF</title>\n"
-                    "<style>\n"
-                    "body { font-family: Georgia, serif; max-width: 800px; "
-                    "margin: 2rem auto; padding: 1rem; line-height: 1.6; }\n"
-                    ".page { margin-bottom: 3rem; padding-bottom: 2rem; "
-                    "border-bottom: 1px solid #eee; }\n"
-                    ".page-num { color: #888; font-size: 0.8em; "
-                    "text-transform: uppercase; letter-spacing: 0.05em; "
-                    "margin-bottom: 1rem; }\n"
-                    "</style>\n</head>\n<body>\n"
-                    + "\n".join(body_parts)
-                    + "\n</body>\n</html>"
-                )
+            html_output = _pdf_to_html_document(doc, layout)
         finally:
             doc.close()
 
@@ -1413,7 +1611,8 @@ def pdf_to_html_task(self, job_id):
 
         job.status = "completed"
         job.output_file = f"outputs/{output_name}"
-        job.completed_at = datetime.now()
+        _check_output_size(Path(settings.MEDIA_ROOT) / job.output_file)
+        job.completed_at = timezone.now()
         job.save(update_fields=["status", "output_file", "completed_at"])
 
         try:
@@ -1440,7 +1639,9 @@ def markdown_to_pdf_task(self, job_id):
     Options:
       - markdown: Markdown string
     """
+    import io
     import ironpress
+    from pypdf import PdfReader
 
     try:
         job = Job.objects.get(id=job_id)
@@ -1460,6 +1661,7 @@ def markdown_to_pdf_task(self, job_id):
             raise ValueError("Markdown content is required.")
 
         pdf_bytes = ironpress.markdown_to_pdf(md_content)
+        _check_page_count(PdfReader(io.BytesIO(pdf_bytes)))
 
         output_name = f"{uuid.uuid4().hex}.pdf"
         output_path = output_dir / output_name
@@ -1468,7 +1670,8 @@ def markdown_to_pdf_task(self, job_id):
 
         job.status = "completed"
         job.output_file = f"outputs/{output_name}"
-        job.completed_at = datetime.now()
+        _check_output_size(Path(settings.MEDIA_ROOT) / job.output_file)
+        job.completed_at = timezone.now()
         job.save(update_fields=["status", "output_file", "completed_at"])
 
         return {"status": "completed"}
@@ -1489,7 +1692,7 @@ def pdf_to_markdown_task(self, job_id):
     Options:
       - layout: "simple" | "preserve" (default: "preserve")
     """
-    import fitz  # PyMuPDF
+    import pymupdf as fitz
 
     try:
         job = Job.objects.get(id=job_id)
@@ -1552,7 +1755,8 @@ def pdf_to_markdown_task(self, job_id):
 
         job.status = "completed"
         job.output_file = f"outputs/{output_name}"
-        job.completed_at = datetime.now()
+        _check_output_size(Path(settings.MEDIA_ROOT) / job.output_file)
+        job.completed_at = timezone.now()
         job.save(update_fields=["status", "output_file", "completed_at"])
 
         try:

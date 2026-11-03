@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ArrowRight, Mail, Lock, User, Sparkles, Check } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
+import { ApiError } from "@/lib/api";
 
 const PERKS = [
     "20 files per day (vs 5 for guests)",
@@ -41,10 +42,10 @@ export default function RegisterPage() {
         try {
             await register(email, username, password, passwordConfirm);
             router.push("/dashboard");
-        } catch (err: any) {
-            if (err.status === 400) {
+        } catch (err: unknown) {
+            if (err instanceof ApiError && err.status === 400) {
                 setError(err.message || "Invalid details. Check all fields.");
-            } else if (err.status === 429) {
+            } else if (err instanceof ApiError && err.status === 429) {
                 setError("Too many attempts. Please try again later.");
             } else {
                 setError("Could not create account. Please try again.");

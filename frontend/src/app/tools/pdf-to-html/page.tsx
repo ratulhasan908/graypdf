@@ -14,7 +14,8 @@ import {
     Layout,
     AlignLeft,
 } from "lucide-react";
-import { apiUpload, apiFetch } from "@/lib/api";
+import type { LucideIcon } from "lucide-react";
+import { apiUpload, apiFetch, getErrorMessage} from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import ToolLayout from "@/components/ToolLayout";
 
@@ -33,20 +34,20 @@ const LAYOUT_OPTIONS: {
     id: Layout2;
     title: string;
     desc: string;
-    Icon: any;
+    Icon: LucideIcon;
     badge?: string;
 }[] = [
         {
             id: "simple",
             title: "Clean HTML",
-            desc: "Readable headings and paragraphs. Best for editing.",
+            desc: "Flow-based headings, paragraphs, and lists with embedded CSS.",
             Icon: AlignLeft,
             badge: "Recommended",
         },
         {
             id: "preserve",
             title: "Preserve layout",
-            desc: "Approximate positions preserved. Best for forms.",
+            desc: "Positioned text and images to approximate the PDF page layout.",
             Icon: Layout,
         },
     ];
@@ -104,10 +105,10 @@ export default function PdfToHtmlPage() {
                     stopPolling();
                     setLoading(false);
                 }
-            } catch (err: any) {
+            } catch (err: unknown) {
                 stopPolling();
                 setLoading(false);
-                setError(err.message || "Failed to check job status.");
+                setError(getErrorMessage(err, "Failed to check job status."));
             }
         }, 2000);
     }
@@ -136,8 +137,8 @@ export default function PdfToHtmlPage() {
             } else {
                 startPolling(result.id);
             }
-        } catch (err: any) {
-            setError(err.message || "Conversion failed.");
+        } catch (err: unknown) {
+            setError(getErrorMessage(err, "Conversion failed."));
             setLoading(false);
         }
     }
@@ -161,7 +162,7 @@ export default function PdfToHtmlPage() {
         <ToolLayout
             icon={FileCode}
             title="PDF to HTML"
-            description="Turn PDF pages into a web page you can view, copy, or edit in a browser."
+            description="Rebuild PDF text as editable, flow-based HTML with inferred structure and embedded CSS."
             color="from-sky-500 to-sky-600"
         >
             {!job && (
@@ -374,7 +375,7 @@ export default function PdfToHtmlPage() {
                             Conversion complete
                         </h2>
                         <p className="text-[#0D1C42]/60 mb-8">
-                            Your HTML file is ready. Open it in any browser.
+                            Your complete HTML file includes its CSS and is ready to open or edit.
                         </p>
 
                         <a

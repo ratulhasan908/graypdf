@@ -18,7 +18,8 @@ import {
     AlignLeft,
     BookOpen,
 } from "lucide-react";
-import { apiUpload, apiFetch } from "@/lib/api";
+import type { LucideIcon } from "lucide-react";
+import { apiUpload, apiFetch, getErrorMessage} from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import ToolLayout from "@/components/ToolLayout";
 
@@ -37,7 +38,7 @@ const LAYOUT_OPTIONS: {
     id: Layout2;
     title: string;
     desc: string;
-    Icon: any;
+    Icon: LucideIcon;
     badge?: string;
 }[] = [
         {
@@ -116,10 +117,10 @@ export default function PdfToMarkdownPage() {
                     stopPolling();
                     setLoading(false);
                 }
-            } catch (err: any) {
+            } catch (err: unknown) {
                 stopPolling();
                 setLoading(false);
-                setError(err.message || "Failed to check job status.");
+                setError(getErrorMessage(err, "Failed to check job status."));
             }
         }, 2000);
     }
@@ -148,8 +149,8 @@ export default function PdfToMarkdownPage() {
             } else {
                 startPolling(result.id);
             }
-        } catch (err: any) {
-            setError(err.message || "Conversion failed.");
+        } catch (err: unknown) {
+            setError(getErrorMessage(err, "Conversion failed."));
             setLoading(false);
         }
     }
