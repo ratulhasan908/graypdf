@@ -594,12 +594,11 @@ def pdf_to_jpg_task(self, job_id):
             with tempfile.TemporaryDirectory() as tmpdir:
                 written = []
                 for i, page in enumerate(doc):
-                    zoom = dpi / 72.0
-                    matrix = fitz.Matrix(zoom, zoom)
-                    pix = page.get_pixmap(matrix=matrix, alpha=False)
+                    pix = pdf_tools.render_page(page, dpi)
                     jpg_name = f"page-{i + 1}.jpg"
                     jpg_path = Path(tmpdir) / jpg_name
                     pix.save(str(jpg_path))
+                    del pix  # free this page's pixels before drawing the next
                     written.append((jpg_name, jpg_path))
 
                 with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:

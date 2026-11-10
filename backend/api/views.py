@@ -43,7 +43,7 @@ from .tasks import (
     pdf_to_markdown_task,
 )
 from .office_tools import MAX_OCR_LANGUAGES, OCR_LANGUAGES, office_file_problem
-from .pdf_tools import list_form_fields
+from .pdf_tools import list_form_fields, render_page
 from .rate_limit import (
     check_and_increment_guest,
     check_and_increment_user,
@@ -2095,7 +2095,7 @@ def page_previews(request):
     try:
         pages = []
         for page in doc.pages(0, min(doc.page_count, settings.MAX_PREVIEW_PAGES)):
-            image = page.get_pixmap(dpi=dpi, alpha=False).tobytes("jpeg", jpg_quality=75)
+            image = render_page(page, dpi).tobytes("jpeg", jpg_quality=75)
             pages.append({
                 "width": page.rect.width,
                 "height": page.rect.height,

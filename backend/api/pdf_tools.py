@@ -25,6 +25,19 @@ MAX_SLIDE_POINTS = 4032  # PowerPoint's 56 inch limit
 COMPARE_LABEL_HEIGHT = 26
 
 
+def render_page(page, dpi):
+    """
+    Draw a page as an RGB pixmap at `dpi`, or lower when that would take more
+    than MAX_RENDER_PIXELS (a long web-page export at 150 dpi can need 400 MB).
+    """
+    zoom = dpi / 72
+    width, height = page.rect.width * zoom, page.rect.height * zoom
+    limit = getattr(settings, "MAX_RENDER_PIXELS", 25_000_000)
+    if width * height > limit:
+        zoom *= (limit / (width * height)) ** 0.5
+    return page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False)
+
+
 def open_pdf(path):
     """Open a PDF for reading, enforcing the password and page rules."""
     doc = pymupdf.open(str(path))
@@ -208,7 +221,7 @@ def to_powerpoint(inputs, output, options):
                 images=pymupdf.PDF_REDACT_IMAGE_NONE,
                 graphics=pymupdf.PDF_REDACT_LINE_ART_NONE,
             )
-            picture = page.get_pixmap(dpi=150, alpha=False).tobytes("jpeg", jpg_quality=88)
+            picture = render_page(page, 150).tobytes("jpeg", jpg_quality=88)
             slide.shapes.add_picture(
                 io.BytesIO(picture),
                 0,

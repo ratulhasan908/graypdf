@@ -309,6 +309,10 @@ MAX_UPLOAD_FILE_SIZE = 50 * 1024 * 1024
 MAX_TOTAL_UPLOAD_SIZE = 200 * 1024 * 1024
 MAX_TEXT_INPUT_CHARS = 2_000_000  # pasted HTML / Markdown
 MAX_PREVIEW_PAGES = 200
+# Most pixels one page may be drawn with (RGB, 3 bytes each). Very tall or very
+# large pages are drawn at a lower resolution instead, so one page can't use up
+# a small server's memory and take the whole site down.
+MAX_RENDER_PIXELS = int(os.getenv("MAX_RENDER_PIXELS", str(25_000_000)))
 MAX_SIGNATURE_BYTES = 5 * 1024 * 1024
 OFFICE_TIMEOUT_SECONDS = 180
 MAX_OCR_PAGES = 100
