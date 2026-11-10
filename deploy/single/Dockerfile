@@ -1,6 +1,8 @@
-# GreyPDF API as a Hugging Face Docker Space: one container runs Redis, the
-# Celery worker (with the cleanup scheduler) and gunicorn. The database is
-# outside, on Neon. Built by deploy/huggingface/push.sh with backend/ as context.
+# GreyPDF API in a single container: Redis, the Celery worker (with the
+# cleanup scheduler) and gunicorn, started by backend/start.sh. The database
+# is outside (e.g. Neon, via DATABASE_URL). Build with backend/ as the context:
+#   docker build -f deploy/single/Dockerfile backend
+# render.yaml uses this for Render's free plan.
 FROM python:3.11-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -34,7 +36,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         tesseract-ocr-urd \
     && rm -rf /var/lib/apt/lists/*
 
-# Spaces run the container as uid 1000.
 RUN useradd --create-home --uid 1000 user
 WORKDIR /app
 
@@ -48,5 +49,5 @@ RUN SECRET_KEY=collectstatic-only python manage.py collectstatic --noinput \
 
 USER user
 ENV HOME=/home/user
-EXPOSE 7860
+EXPOSE 10000
 CMD ["bash", "start.sh"]

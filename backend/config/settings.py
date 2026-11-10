@@ -41,6 +41,9 @@ ALLOWED_HOSTS = [
     for h in os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
     if h.strip()
 ]
+# Render tells the service its own public hostname.
+if os.getenv("RENDER_EXTERNAL_HOSTNAME"):
+    ALLOWED_HOSTS.append(os.environ["RENDER_EXTERNAL_HOSTNAME"])
 
 
 # ============================================================================
@@ -310,6 +313,9 @@ MAX_SIGNATURE_BYTES = 5 * 1024 * 1024
 OFFICE_TIMEOUT_SECONDS = 180
 MAX_OCR_PAGES = 100
 OCR_TIMEOUT_SECONDS = 540  # must stay under the OCR task's soft time limit
+# Pages OCR'd in parallel. Each one is a Tesseract process, so small servers
+# (Render's free 512 MB plan) need 1.
+OCR_JOBS = max(1, int(os.getenv("OCR_JOBS", "2")))
 
 
 # ============================================================================

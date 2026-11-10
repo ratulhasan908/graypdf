@@ -219,7 +219,7 @@ def ocr(inputs, output, options):
                 "--output-type",
                 "pdf",
                 "--jobs",
-                "2",
+                str(settings.OCR_JOBS),
                 "--quiet",
                 str(inputs[0]),
                 str(output),
