@@ -30,6 +30,23 @@ urlpatterns = [
     path("tools/markdown-to-pdf/", views.markdown_to_pdf, name="markdown-to-pdf"),
     path("tools/pdf-to-markdown/", views.pdf_to_markdown, name="pdf-to-markdown"),
 
+    path("tools/page-previews/", views.page_previews, name="page-previews"),
+    path("tools/form-fields/", views.form_fields, name="form-fields"),
+    path("tools/pdf-to-word/", views.pdf_to_word, name="pdf-to-word"),
+    path("tools/pdf-to-excel/", views.pdf_to_excel, name="pdf-to-excel"),
+    path("tools/pdf-to-powerpoint/", views.pdf_to_powerpoint, name="pdf-to-powerpoint"),
+    path("tools/sign/", views.sign_pdf, name="sign-pdf"),
+    path("tools/redact/", views.redact_pdf, name="redact-pdf"),
+    path("tools/compare/", views.compare_pdf, name="compare-pdf"),
+    path("tools/repair/", views.repair_pdf, name="repair-pdf"),
+    path("tools/fill-form/", views.fill_form, name="fill-form"),
+    path("tools/remove-pages/", views.remove_pages, name="remove-pages"),
+    path("tools/extract-pages/", views.extract_pages, name="extract-pages"),
+    path("tools/word-to-pdf/", views.word_to_pdf, name="word-to-pdf"),
+    path("tools/excel-to-pdf/", views.excel_to_pdf, name="excel-to-pdf"),
+    path("tools/powerpoint-to-pdf/", views.powerpoint_to_pdf, name="powerpoint-to-pdf"),
+    path("tools/ocr/", views.ocr_pdf, name="ocr-pdf"),
+
     path("jobs/<uuid:job_id>/status/", views.job_status, name="job-status"),
     path("jobs/<uuid:job_id>/download/", views.job_download, name="job-download"),
 ]

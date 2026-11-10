@@ -7,7 +7,7 @@ if (
     !process.env.NEXT_PUBLIC_API_URL
 ) {
     console.warn(
-        "[GrayPDF] NEXT_PUBLIC_API_URL is not set — falling back to localhost. " +
+        "[GreyPDF] NEXT_PUBLIC_API_URL is not set — falling back to localhost. " +
         "This will break in production."
     );
 }
@@ -23,6 +23,18 @@ export class ApiError extends Error {
 
 export function getErrorMessage(error: unknown, fallback: string): string {
     return error instanceof Error && error.message ? error.message : fallback;
+}
+
+/** DRF sends {detail} or per-field lists like {email: ["..."]}. */
+function errorDetail(body: unknown, fallback: string): string {
+    if (!body || typeof body !== "object") return fallback;
+    const record = body as Record<string, unknown>;
+    if (typeof record.detail === "string") return record.detail;
+    for (const value of Object.values(record)) {
+        if (Array.isArray(value) && typeof value[0] === "string") return value[0];
+        if (typeof value === "string") return value;
+    }
+    return fallback;
 }
 
 // Single-flight lock: only one refresh in-flight at a time
@@ -112,42 +124,50 @@ export async function apiFetch<T>(
     });
 
     if (!res.ok) {
-        let detail = `HTTP ${res.status}`;
-        try {
-            const error = await res.json();
-            detail = error.detail || detail;
-        } catch {
-            // not JSON
-        }
-        throw new ApiError(detail, res.status);
+        const fallback = `Request failed (${res.status}).`;
+        const body = await res.json().catch(() => null);
+        throw new ApiError(errorDetail(body, fallback), res.status);
     }
 
     return res.json();
 }
 
-export async function apiUpload<T>(
+/**
+ * Upload with progress. This has no time limit: a large file on a slow
+ * connection can legitimately take minutes, which is why it does not go
+ * through the short-timeout fetch helper above.
+ */
+export function apiUpload<T>(
     endpoint: string,
-    formData: FormData
+    formData: FormData,
+    onProgress?: (percent: number) => void
 ): Promise<T> {
-    const url = `${API_BASE_URL}${endpoint}`;
-    const res = await doFetch(url, {
-        method: "POST",
-        credentials: "include",
-        body: formData,
+    return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", `${API_BASE_URL}${endpoint}`);
+        xhr.withCredentials = true;
+        xhr.responseType = "json";
+
+        xhr.upload.onprogress = (event) => {
+            if (event.lengthComputable && onProgress) {
+                onProgress(Math.round((event.loaded / event.total) * 100));
+            }
+        };
+        xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+                resolve(xhr.response as T);
+            } else {
+                const fallback =
+                    xhr.status === 413
+                        ? "This file is too large."
+                        : `Upload failed (${xhr.status}).`;
+                reject(new ApiError(errorDetail(xhr.response, fallback), xhr.status));
+            }
+        };
+        xhr.onerror = () =>
+            reject(new ApiError("Upload failed. Check your connection and try again.", 0));
+        xhr.send(formData);
     });
-
-    if (!res.ok) {
-        let detail = `HTTP ${res.status}`;
-        try {
-            const error = await res.json();
-            detail = error.detail || detail;
-        } catch {
-            // not JSON
-        }
-        throw new ApiError(detail, res.status);
-    }
-
-    return res.json();
 }
 
 export function getApiBaseUrl(): string {

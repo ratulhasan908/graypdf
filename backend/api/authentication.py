@@ -1,26 +1,39 @@
+from rest_framework.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
+from rest_framework_simplejwt.tokens import RefreshToken
 
 
 class CookieJWTAuthentication(JWTAuthentication):
     """
-    Read JWT from httpOnly cookie instead of the Authorization header.
+    Read JWTs from httpOnly cookies instead of the Authorization header.
 
-    IMPORTANT: If the cookie contains an invalid/expired token, we silently
-    ignore it and treat the request as anonymous — so AllowAny views still work.
+    Tool endpoints allow anonymous use, so a request with an expired access
+    token would quietly become a guest and hit guest limits. To prevent that,
+    a valid refresh cookie also identifies the user. An invalid session is
+    never an error here: the request simply continues as anonymous.
     """
 
     def authenticate(self, request):
-        raw_token = request.COOKIES.get("access_token")
+        access = request.COOKIES.get("access_token")
+        refresh = request.COOKIES.get("refresh_token")
 
-        # No cookie → fall back to header (for API clients / curl)
-        if raw_token is None:
+        # No cookies: fall back to the header (API clients / curl).
+        if access is None and refresh is None:
             return super().authenticate(request)
 
-        # Cookie present → try to validate it. If invalid, return None
-        # so the request continues as anonymous.
-        try:
-            validated_token = self.get_validated_token(raw_token)
-            return self.get_user(validated_token), validated_token
-        except (InvalidToken, TokenError):
-            return None
+        if access:
+            try:
+                validated_token = self.get_validated_token(access)
+                return self.get_user(validated_token), validated_token
+            except (InvalidToken, TokenError, AuthenticationFailed):
+                pass
+
+        if refresh:
+            try:
+                token = RefreshToken(refresh)  # checks signature, expiry, blacklist
+                return self.get_user(token), token
+            except (TokenError, AuthenticationFailed):
+                pass
+
+        return None

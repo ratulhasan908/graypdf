@@ -1,101 +1,139 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { ChevronDown, LayoutDashboard, LogOut } from "lucide-react";
+import Logo from "@/components/Logo";
 import { useAuth } from "@/context/AuthContext";
 
-function getInitials(name: string): string {
-    const parts = name.trim().split(/[\s._-]+/);
-    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-    return (parts[0][0] + parts[1][0]).toUpperCase();
+function GuestAllowance() {
+    const { usage } = useAuth();
+    if (!usage?.is_guest || usage.remaining === null) return null;
+    const out = usage.remaining === 0;
+    return (
+        <Link
+            href="/register"
+            title="Sign up free for unlimited files"
+            className={`hidden sm:inline-flex text-xs font-medium px-2.5 py-1 rounded-full transition-colors ${
+                out ? "bg-danger-soft text-danger" : "bg-surface-2 text-ink-2 hover:text-ink"
+            }`}
+        >
+            {usage.remaining} of {usage.limit} files left today
+        </Link>
+    );
 }
 
-export default function Navbar() {
-    const { user, usage, loading, logout } = useAuth();
+function AccountMenu() {
+    const { user, logout } = useAuth();
     const router = useRouter();
+    const [open, setOpen] = useState(false);
+    const menu = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        if (!open) return;
+        function close(event: MouseEvent | KeyboardEvent) {
+            if (event instanceof KeyboardEvent) {
+                if (event.key === "Escape") setOpen(false);
+            } else if (!menu.current?.contains(event.target as Node)) {
+                setOpen(false);
+            }
+        }
+        document.addEventListener("mousedown", close);
+        document.addEventListener("keydown", close);
+        return () => {
+            document.removeEventListener("mousedown", close);
+            document.removeEventListener("keydown", close);
+        };
+    }, [open]);
+
+    if (!user) return null;
 
     async function handleLogout() {
+        setOpen(false);
         await logout();
         router.push("/");
     }
 
+    const item = "flex items-center gap-2 w-full px-3 py-2 text-sm rounded-lg hover:bg-surface-2 transition-colors";
+
     return (
-        <nav className="sticky top-0 z-50 glass border-b border-[#e5dcb8]/60">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
-                {/* Logo */}
-                <Link
-                    href="/"
-                    className="flex items-center gap-2.5 group"
-                    aria-label="GrayPDF home"
-                >
-                    <div className="relative w-9 h-9 rounded-xl bg-gradient-to-br from-[#010736] via-[#0d1c42] to-[#22396f] flex items-center justify-center shadow-md group-hover:shadow-lg transition-all duration-300 group-hover:scale-105">
-                        <span className="text-[#FCF1D0] font-bold text-lg tracking-tight">
-                            G
-                        </span>
-                        <div className="absolute inset-0 rounded-xl bg-gradient-to-br from-[#4f7cff] to-[#8b5cf6] opacity-0 group-hover:opacity-30 transition-opacity duration-300 blur-md -z-10" />
-                    </div>
-                    <span className="text-lg font-bold tracking-tight text-[#010736]">
-                        Gray<span className="text-[#22396F]">PDF</span>
-                    </span>
-                </Link>
+        <div className="relative" ref={menu}>
+            <button
+                type="button"
+                onClick={() => setOpen(!open)}
+                aria-expanded={open}
+                aria-haspopup="menu"
+                className="flex items-center gap-1.5 pl-1 pr-2 py-1 rounded-full hover:bg-surface-2 transition-colors"
+            >
+                <span className="w-7 h-7 rounded-full bg-ink text-white text-xs font-semibold flex items-center justify-center uppercase">
+                    {user.username.slice(0, 1)}
+                </span>
+                <ChevronDown className="w-3.5 h-3.5 text-ink-3" aria-hidden />
+                <span className="sr-only">Account menu</span>
+            </button>
+            {open && (
+                <div role="menu" className="absolute right-0 mt-2 w-56 card p-1.5 shadow-lg rise">
+                    <p className="px-3 py-2 text-xs text-ink-3 truncate">{user.email}</p>
+                    <Link href="/dashboard" role="menuitem" className={item} onClick={() => setOpen(false)}>
+                        <LayoutDashboard className="w-4 h-4" aria-hidden />
+                        Dashboard
+                    </Link>
+                    <button type="button" role="menuitem" className={item} onClick={handleLogout}>
+                        <LogOut className="w-4 h-4" aria-hidden />
+                        Log out
+                    </button>
+                </div>
+            )}
+        </div>
+    );
+}
 
-                {/* Right side */}
-                <div className="flex items-center gap-2 sm:gap-3">
-                    {usage && (
-                        <Link
-                            href={user ? "/dashboard" : "/register"}
-                            className={`hidden sm:inline-flex text-xs px-3 py-1.5 rounded-full font-medium transition-all border ${usage.is_guest
-                                    ? usage.remaining === 0
-                                        ? "bg-red-50 text-red-700 border-red-200 hover:bg-red-100"
-                                        : usage.remaining <= 2
-                                            ? "bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100"
-                                            : "bg-white/70 text-[#0D1C42] border-[#e5dcb8] hover:bg-white"
-                                    : "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100"
-                                }`}
-                            title="Daily file usage"
-                        >
-                            {usage.used}/{usage.limit} today
+export default function Navbar() {
+    const { user, loading } = useAuth();
+
+    const navLink =
+        "h-9 inline-flex items-center px-3 rounded-lg text-ink-2 hover:text-ink hover:bg-ink/5 transition-colors";
+
+    return (
+        <header className="sticky top-0 z-40 px-3 sm:px-4 pt-3">
+            <div className="nav-glass max-w-6xl mx-auto h-14 rounded-2xl pl-4 pr-2 flex items-center justify-between gap-4">
+                <div className="flex items-center gap-5 h-full">
+                    <Link href="/" aria-label="GreyPDF home" className="flex items-center h-full">
+                        <Logo />
+                    </Link>
+                    <nav aria-label="Main" className="hidden md:flex items-center gap-0.5 text-sm">
+                        <Link href="/#tools" className={navLink}>
+                            Tools
                         </Link>
-                    )}
-
-                    {loading ? (
-                        <div className="w-20 h-8 skeleton rounded-lg" />
-                    ) : user ? (
-                        <>
-                            <Link
-                                href="/dashboard"
-                                className="hidden sm:inline-block text-sm font-medium text-[#0D1C42] hover:text-[#22396F] transition-colors px-3 py-2"
-                            >
+                        <Link href="/#how" className={navLink}>
+                            How it works
+                        </Link>
+                        <Link href="/#faq" className={navLink}>
+                            FAQ
+                        </Link>
+                        {user && (
+                            <Link href="/dashboard" className={navLink}>
                                 Dashboard
                             </Link>
+                        )}
+                    </nav>
+                </div>
 
-                            <div className="flex items-center gap-2 pl-1 pr-3 py-1 rounded-full bg-white/70 border border-[#e5dcb8]">
-                                <div className="w-7 h-7 rounded-full bg-gradient-to-br from-[#22396F] to-[#0D1C42] flex items-center justify-center text-[#FCF1D0] text-xs font-bold">
-                                    {getInitials(user.username)}
-                                </div>
-                                <span className="text-sm font-medium text-[#010736] hidden sm:inline max-w-[120px] truncate">
-                                    {user.username}
-                                </span>
-                            </div>
-
-                            <button
-                                onClick={handleLogout}
-                                className="text-sm font-medium text-[#0D1C42] hover:text-red-600 transition-colors px-2"
-                            >
-                                Log out
-                            </button>
-                        </>
+                <div className="flex items-center gap-1.5">
+                    <GuestAllowance />
+                    {loading ? (
+                        <div className="w-28 h-9 skeleton" />
+                    ) : user ? (
+                        <AccountMenu />
                     ) : (
                         <>
-                            <Link
-                                href="/login"
-                                className="text-sm font-medium text-[#0D1C42] hover:text-[#22396F] transition-colors px-3 py-2"
-                            >
+                            <Link href="/login" className={`${navLink} text-sm`}>
                                 Log in
                             </Link>
                             <Link
                                 href="/register"
-                                className="relative text-sm font-semibold bg-gradient-to-br from-[#010736] to-[#22396f] hover:brightness-110 text-[#FCF1D0] px-4 py-2 rounded-lg transition-all shadow-md hover:shadow-lg hover:-translate-y-0.5"
+                                className="btn btn-dark h-9 py-0! px-4! text-sm! rounded-xl! shadow-[0_6px_16px_-8px_rgba(10,12,30,0.8)]"
                             >
                                 Sign up free
                             </Link>
@@ -103,6 +141,6 @@ export default function Navbar() {
                     )}
                 </div>
             </div>
-        </nav>
+        </header>
     );
 }

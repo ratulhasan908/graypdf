@@ -1,0 +1,8 @@
+.env
+.venv/
+media/
+test_files/
+__pycache__/
+*.pyc
+celerybeat-schedule*
+*.pdf

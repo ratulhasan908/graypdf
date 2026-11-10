@@ -47,6 +47,20 @@ class Job(models.Model):
         ("pdf-to-html", "PDF to HTML"),
         ("markdown-to-pdf", "Markdown to PDF"),
         ("pdf-to-markdown", "PDF to Markdown"),
+        ("pdf-to-word", "PDF to Word"),
+        ("pdf-to-excel", "PDF to Excel"),
+        ("pdf-to-powerpoint", "PDF to PowerPoint"),
+        ("sign", "Sign PDF"),
+        ("redact", "Redact PDF"),
+        ("compare", "Compare PDF"),
+        ("repair", "Repair PDF"),
+        ("fill-form", "Fill PDF Form"),
+        ("remove-pages", "Remove Pages"),
+        ("extract-pages", "Extract Pages"),
+        ("word-to-pdf", "Word to PDF"),
+        ("excel-to-pdf", "Excel to PDF"),
+        ("powerpoint-to-pdf", "PowerPoint to PDF"),
+        ("ocr", "OCR PDF"),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

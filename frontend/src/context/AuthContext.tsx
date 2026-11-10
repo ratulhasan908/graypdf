@@ -19,8 +19,8 @@ export type User = {
 
 export type Usage = {
     used: number;
-    limit: number;
-    remaining: number;
+    limit: number | null; // null = unlimited
+    remaining: number | null;
     is_guest: boolean;
 };
 

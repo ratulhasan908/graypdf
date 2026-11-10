@@ -19,7 +19,7 @@ class UserAdmin(BaseUserAdmin):
 
     fieldsets = BaseUserAdmin.fieldsets + (
         (
-            "GrayPDF",
+            "GreyPDF",
             {
                 "fields": (
                     "is_premium",

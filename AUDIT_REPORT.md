@@ -1,4 +1,4 @@
-# GrayPDF Application Audit and Remediation
+# GreyPDF Application Audit and Remediation
 
 **Audit date:** 2026-11-03  
 **Remediation status:** Code findings addressed; deployment steps and runtime integration checks remain.  

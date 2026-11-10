@@ -1,12 +1,37 @@
+import io
+import logging
 import os
+import re
+import shutil
+import subprocess
 import uuid
 from pathlib import Path
 
 from celery import shared_task
 from django.conf import settings
+from django.db.models import Q
 from django.utils import timezone
 
+from . import office_tools, pdf_tools
 from .models import Job
+from .pdf_structure import render_html, render_markdown
+
+logger = logging.getLogger(__name__)
+
+WATERMARK_TEXT_ERROR = (
+    "Watermarks currently support Latin characters only (English and most "
+    "European languages)."
+)
+
+
+def is_watermark_text_supported(text):
+    """The stamp font is Helvetica, which draws anything else as solid boxes."""
+    try:
+        text.encode("cp1252")
+    except UnicodeEncodeError:
+        return False
+    return True
+
 
 
 def _check_page_count(reader_or_doc, context="PDF"):
@@ -40,242 +65,87 @@ def _check_output_size(path, context="Output"):
         raise ValueError(f"{context} is {size_mb:.1f} MB — max is {max_mb} MB.")
 
 
-def _pdf_to_html_document(doc, layout):
-    import base64
-    import html
-    import re
-    from statistics import median
+def _friendly_error(exc):
+    """
+    Turn an exception into a message that is safe and useful to show users.
+    Library errors can contain server paths, so only pass through our own
+    ValueErrors and map the rest.
+    """
+    from billiard.exceptions import SoftTimeLimitExceeded
+    from pymupdf import FileDataError
+    from pypdf.errors import EmptyFileError, FileNotDecryptedError, PdfReadError, PdfStreamError
 
-    page_markup = []
-    has_document_title = False
-    for page_number, page in enumerate(doc, start=1):
-        page_width = float(page.rect.width)
-        page_height = float(page.rect.height)
+    message = str(exc)
+    lowered = message.lower()
 
-        if layout == "preserve":
-            elements = []
-            page_data = page.get_text("dict")
-            for block in page_data["blocks"]:
-                if block.get("type") == 1 and block.get("image"):
-                    image_ext = block.get("ext", "").lower()
-                    image_mime = {
-                        "jpeg": "image/jpeg",
-                        "jpg": "image/jpeg",
-                        "png": "image/png",
-                        "gif": "image/gif",
-                    }.get(image_ext)
-                    if image_mime:
-                        x0, y0, x1, y1 = block["bbox"]
-                        image_data = base64.b64encode(block["image"]).decode("ascii")
-                        elements.append(
-                            '<img class="pdf-image" '
-                            f'style="left:{x0:.2f}pt;top:{y0:.2f}pt;'
-                            f'width:{x1 - x0:.2f}pt;height:{y1 - y0:.2f}pt" '
-                            f'src="data:{image_mime};base64,{image_data}" '
-                            f'alt="Image from page {page_number}">'
-                        )
-                elif block.get("type") == 0:
-                    for line in block.get("lines", []):
-                        for span in line.get("spans", []):
-                            text = span.get("text", "")
-                            if not text:
-                                continue
-                            x0, y0, x1, y1 = span["bbox"]
-                            flags = span.get("flags", 0)
-                            color = span.get("color", 0)
-                            color_hex = f"#{color & 0xFFFFFF:06x}"
-                            styles = [
-                                f"left:{x0:.2f}pt",
-                                f"top:{y0:.2f}pt",
-                                f"font-size:{max(float(span.get('size', 1)), 1):.2f}pt",
-                                f"color:{color_hex}",
-                            ]
-                            if flags & 16:
-                                styles.append("font-weight:700")
-                            if flags & 2:
-                                styles.append("font-style:italic")
-                            elements.append(
-                                f'<span class="pdf-text" style="{";".join(styles)}">'
-                                f"{html.escape(text)}</span>"
-                            )
+    if isinstance(exc, FileNotDecryptedError) or "encrypted" in lowered or "decrypted" in lowered:
+        return "This PDF is password-protected. Use Unlock PDF first, then try again."
+    if isinstance(exc, (EmptyFileError, PdfStreamError, PdfReadError, FileDataError)) or (
+        "failed to open file" in lowered or "cannot open" in lowered
+    ):
+        return "This file could not be read. It may be damaged or not a real PDF."
+    if isinstance(exc, (SoftTimeLimitExceeded, subprocess.TimeoutExpired)):
+        return "This file took too long to process. Try a smaller file."
+    if isinstance(exc, ValueError) and message and "invalid literal" not in lowered:
+        return message
 
-            content = "\n".join(elements)
-            page_class = "page page-preserved"
-        else:
-            blocks = []
-            font_sizes = []
-            for block in page.get_text("dict", sort=True)["blocks"]:
-                if block.get("type") == 1 and block.get("image"):
-                    image_ext = block.get("ext", "").lower()
-                    image_mime = {
-                        "jpeg": "image/jpeg",
-                        "jpg": "image/jpeg",
-                        "png": "image/png",
-                        "gif": "image/gif",
-                    }.get(image_ext)
-                    if image_mime:
-                        image_data = base64.b64encode(block["image"]).decode("ascii")
-                        blocks.append(
-                            ("image", "", '<figure><img '
-                             f'src="data:{image_mime};base64,{image_data}" '
-                             f'alt="Image from page {page_number}"></figure>', 0, 0, 1)
-                        )
-                    continue
-                if block.get("type") != 0:
-                    continue
+    logger.error("Unexpected job failure", exc_info=exc)
+    return "Something went wrong while processing this file. Please try again."
 
-                lines = []
-                styled_lines = []
-                block_sizes = []
-                bold_characters = 0
-                total_characters = 0
-                for line in block.get("lines", []):
-                    plain_parts = []
-                    styled_parts = []
-                    for span in line.get("spans", []):
-                        text = span.get("text", "")
-                        if not text:
-                            continue
-                        plain_parts.append(text)
-                        escaped_text = html.escape(text)
-                        flags = span.get("flags", 0)
-                        if flags & 2:
-                            escaped_text = f"<em>{escaped_text}</em>"
-                        if flags & 16:
-                            escaped_text = f"<strong>{escaped_text}</strong>"
-                        styled_parts.append(escaped_text)
-                        character_count = len(text.strip())
-                        total_characters += character_count
-                        if flags & 16:
-                            bold_characters += character_count
-                        size = float(span.get("size", 0))
-                        if size > 0:
-                            block_sizes.append(size)
-                            font_sizes.extend([size] * max(character_count, 1))
 
-                    plain_line = "".join(plain_parts).strip()
-                    if plain_line:
-                        lines.append(plain_line)
-                        styled_lines.append("".join(styled_parts).strip())
+def _parse_page_ranges(spec, total_pages):
+    """
+    Parse "1-3,5" into [("1-3", [0, 1, 2]), ("5", [4])], using 0-based indices.
+    Raises a ValueError with a message written for the user.
+    """
+    groups = []
+    for part in str(spec).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        match = re.fullmatch(r"(\d+)(?:\s*-\s*(\d+))?", part)
+        if not match:
+            raise ValueError(f'"{part}" is not a valid page range. Use a format like 1-3,5.')
+        start = int(match.group(1))
+        end = int(match.group(2) or start)
+        if start < 1 or end > total_pages or start > end:
+            raise ValueError(f'"{part}" is outside this PDF, which has {total_pages} pages.')
+        label = str(start) if start == end else f"{start}-{end}"
+        groups.append((label, list(range(start - 1, end))))
+    if not groups:
+        raise ValueError("Enter at least one page or range, like 1-3,5.")
+    return groups
 
-                if not lines:
-                    continue
-                plain_text = " ".join(lines)
-                plain_text = re.sub(r"- (?=[a-z])", "", plain_text)
-                plain_text = re.sub(r"\s+", " ", plain_text).strip()
-                markup = " ".join(styled_lines)
-                markup = re.sub(r"- (?=[a-z])", "", markup)
-                blocks.append(
-                    (
-                        "text",
-                        plain_text,
-                        markup,
-                        median(block_sizes) if block_sizes else 0,
-                        bold_characters / total_characters if total_characters else 0,
-                        len(lines),
-                    )
-                )
 
-            body_size = median(font_sizes) if font_sizes else 10
-            content_parts = []
-            list_items = []
+def _visible_box(page):
+    """
+    Bake any /Rotate into the content, then return the box viewers display.
+    After this, drawing coordinates match what the user sees on screen.
+    """
+    page.transfer_rotation_to_content()
+    box = page.cropbox
+    return float(box.left), float(box.bottom), float(box.width), float(box.height)
 
-            def flush_list():
-                if list_items:
-                    content_parts.append("<ul>\n" + "\n".join(list_items) + "\n</ul>")
-                    list_items.clear()
 
-            for kind, plain_text, markup, font_size, bold_ratio, line_count in blocks:
-                if kind == "image":
-                    flush_list()
-                    content_parts.append(markup)
-                    continue
+def _stamp_page(page, draw):
+    """Overlay `draw(canvas, width, height)` on the visible area of a page."""
+    from pypdf import PdfReader, Transformation
+    from reportlab.pdfgen import canvas as rl_canvas
 
-                bullet = re.match(r"^\s*[•●▪◦‣*-]\s*(.+)$", plain_text)
-                if bullet:
-                    list_items.append(f"<li>{html.escape(bullet.group(1))}</li>")
-                    continue
-                flush_list()
+    left, bottom, width, height = _visible_box(page)
+    packet = io.BytesIO()
+    canvas = rl_canvas.Canvas(packet, pagesize=(width, height))
+    draw(canvas, width, height)
+    canvas.save()
+    packet.seek(0)
+    overlay = PdfReader(packet).pages[0]
+    page.merge_transformed_page(overlay, Transformation().translate(left, bottom))
 
-                letters = [character for character in plain_text if character.isalpha()]
-                is_uppercase_label = (
-                    len(plain_text) <= 90
-                    and bool(letters)
-                    and all(character.isupper() for character in letters)
-                    and bold_ratio >= 0.5
-                )
-                if line_count == 1 and font_size >= body_size * 1.5:
-                    tag = "h2" if has_document_title else "h1"
-                    has_document_title = True
-                elif line_count == 1 and (
-                    font_size >= body_size * 1.2 or is_uppercase_label
-                ):
-                    tag = "h2"
-                else:
-                    tag = "p"
-                content_parts.append(f"<{tag}>{markup}</{tag}>")
 
-            flush_list()
-            content = "\n".join(content_parts)
-            page_class = "page page-readable"
+def _release_text_payload(job, key):
+    """Pasted HTML/Markdown is user content, so it must not outlive the job."""
+    job.options = {k: v for k, v in (job.options or {}).items() if k != key}
 
-        page_style = (
-            f' style="--page-width:{page_width:.2f}pt;'
-            f'--page-height:{page_height:.2f}pt"'
-            if layout == "preserve"
-            else ""
-        )
-        page_markup.append(
-            f'<section class="{page_class}"{page_style} '
-            f'aria-label="Page {page_number}">\n'
-            f"{content}\n"
-            "</section>"
-        )
-
-    return (
-        "<!doctype html>\n"
-        '<html lang="en">\n'
-        "<head>\n"
-        '  <meta charset="utf-8">\n'
-        '  <meta name="viewport" content="width=device-width, initial-scale=1">\n'
-        "  <title>PDF converted to HTML</title>\n"
-        "  <style>\n"
-        "    :root { color-scheme: light; font-family: Arial, sans-serif; }\n"
-        "    * { box-sizing: border-box; }\n"
-        "    body { margin: 0; padding: 40px 20px; background: #f3f4f6; color: #1f2937; }\n"
-        "    main { max-width: 850px; margin: 0 auto; padding: 48px; background: #fff; "
-        "box-shadow: 0 2px 16px #17203318; }\n"
-        "    .page-readable { line-height: 1.65; overflow-wrap: anywhere; }\n"
-        "    .page-readable + .page-readable { margin-top: 40px; padding-top: 40px; "
-        "border-top: 1px solid #e5e7eb; }\n"
-        "    h1 { margin: 0 0 1.25em; font-size: 2em; line-height: 1.2; color: #111827; }\n"
-        "    h2 { margin: 1.7em 0 .65em; font-size: 1.15em; line-height: 1.3; "
-        "color: #111827; }\n"
-        "    p { margin: 0 0 1em; }\n"
-        "    ul { margin: 0 0 1em; padding-left: 1.5em; }\n"
-        "    li { margin-bottom: .4em; }\n"
-        "    figure { margin: 1.5em 0; }\n"
-        "    figure img { display: block; max-width: 100%; height: auto; }\n"
-        "    .page-preserved { position: relative; width: var(--page-width); "
-        "min-height: var(--page-height); max-width: 100%; margin: 0 auto 24px; "
-        "padding: 0; background: #fff; overflow: hidden; }\n"
-        "    .pdf-text, .pdf-image { position: absolute; }\n"
-        "    .pdf-text { white-space: pre; line-height: 1; transform-origin: left top; }\n"
-        "    .pdf-image { object-fit: fill; }\n"
-        "    @media (max-width: 700px) { body { padding: 12px; } main { padding: 24px; } }\n"
-        "    @media print { body { padding: 0; background: #fff; } "
-        "      main { max-width: none; padding: 0; box-shadow: none; } "
-        "      .page-readable + .page-readable { margin-top: 0; padding-top: 0; "
-        "border-top: 0; break-before: page; } }\n"
-        "  </style>\n"
-        "</head>\n"
-        "<body>\n"
-        "<main>\n"
-        + "\n".join(page_markup)
-        + "\n</main>\n"
-        "</body>\n"
-        "</html>\n"
-    )
 
 @shared_task(bind=True, autoretry_for=(), max_retries=0)
 def merge_pdf_task(self, job_id):
@@ -339,7 +209,7 @@ def merge_pdf_task(self, job_id):
 
     except Exception as e:
         job.status = "failed"
-        job.error_message = str(e)
+        job.error_message = _friendly_error(e)
         job.save(update_fields=["status", "error_message"])
         raise
 
@@ -348,14 +218,18 @@ def merge_pdf_task(self, job_id):
 @shared_task(autoretry_for=(), max_retries=0)
 def cleanup_old_files():
     """
-    Runs every 15 min. Deletes files older than FILE_RETENTION_HOURS
-    and old Job records older than 24 hours.
+    Runs every 15 min. Deletes files older than FILE_RETENTION_HOURS.
+    Guest Job records go after 24 hours; signed-in users keep theirs for
+    JOB_HISTORY_DAYS so the dashboard has a history (records only, no files).
     """
     from datetime import timedelta
 
     retention_hours = getattr(settings, "FILE_RETENTION_HOURS", 2)
     cutoff = timezone.now() - timedelta(hours=retention_hours)
-    job_cutoff = timezone.now() - timedelta(hours=24)
+    guest_job_cutoff = timezone.now() - timedelta(hours=24)
+    user_job_cutoff = timezone.now() - timedelta(
+        days=getattr(settings, "JOB_HISTORY_DAYS", 30)
+    )
 
     media_root = Path(settings.MEDIA_ROOT)
     deleted_files = 0
@@ -377,7 +251,10 @@ def cleanup_old_files():
                 pass
 
     # Delete old Job records
-    old_jobs = Job.objects.filter(created_at__lt=job_cutoff)
+    old_jobs = Job.objects.filter(
+        Q(user__isnull=True, created_at__lt=guest_job_cutoff)
+        | Q(created_at__lt=user_job_cutoff)
+    )
     deleted_jobs = old_jobs.count()
     old_jobs.delete()
 
@@ -433,22 +310,7 @@ def split_pdf_task(self, job_id):
             for i in range(total_pages):
                 groups.append((f"page-{i + 1}", [i]))
         elif mode == "range":
-            ranges_str = options.get("ranges", "").strip()
-            if not ranges_str:
-                raise ValueError("No ranges provided.")
-            for part in ranges_str.split(","):
-                part = part.strip()
-                if "-" in part:
-                    start, end = part.split("-")
-                    start, end = int(start) - 1, int(end) - 1
-                    if start < 0 or end >= total_pages or start > end:
-                        raise ValueError(f"Invalid range: {part}")
-                    groups.append((f"{start + 1}-{end + 1}", list(range(start, end + 1))))
-                else:
-                    idx = int(part) - 1
-                    if idx < 0 or idx >= total_pages:
-                        raise ValueError(f"Invalid page: {part}")
-                    groups.append((f"{idx + 1}", [idx]))
+            groups = _parse_page_ranges(options.get("ranges", ""), total_pages)
         else:
             raise ValueError(f"Unknown split mode: {mode}")
 
@@ -489,7 +351,7 @@ def split_pdf_task(self, job_id):
 
     except Exception as e:
         job.status = "failed"
-        job.error_message = str(e)
+        job.error_message = _friendly_error(e)
         job.save(update_fields=["status", "error_message"])
         raise
 
@@ -501,8 +363,6 @@ def compress_pdf_task(self, job_id):
     Compress a PDF with Ghostscript.
     Options: quality = 'screen' | 'ebook' | 'printer' | 'prepress' (default: 'ebook')
     """
-    import subprocess
-    import shutil
     from pypdf import PdfReader
 
     try:
@@ -551,6 +411,7 @@ def compress_pdf_task(self, job_id):
             "-sDEVICE=pdfwrite",
             "-dCompatibilityLevel=1.4",
             f"-dPDFSETTINGS={gs_preset}",
+            "-dSAFER",
             "-dNOPAUSE",
             "-dQUIET",
             "-dBATCH",
@@ -566,6 +427,10 @@ def compress_pdf_task(self, job_id):
             raise RuntimeError("Ghostscript produced no output.")
 
         original_size = input_path.stat().st_size
+        # Already-optimized PDFs can grow when rewritten. Never hand back a
+        # "compressed" file that is larger than what the user uploaded.
+        if output_path.stat().st_size >= original_size:
+            shutil.copyfile(input_path, output_path)
         compressed_size = output_path.stat().st_size
         savings = 0
         if original_size > 0:
@@ -592,7 +457,7 @@ def compress_pdf_task(self, job_id):
 
     except Exception as e:
         job.status = "failed"
-        job.error_message = str(e)
+        job.error_message = _friendly_error(e)
         job.save(update_fields=["status", "error_message"])
         raise
 
@@ -642,20 +507,11 @@ def rotate_pdf_task(self, job_id):
         if pages_spec == "all" or not pages_spec:
             indices_to_rotate = set(range(total_pages))
         else:
-            indices_to_rotate = set()
-            for part in pages_spec.split(","):
-                part = part.strip()
-                if "-" in part:
-                    start, end = part.split("-")
-                    start, end = int(start) - 1, int(end) - 1
-                    if start < 0 or end >= total_pages or start > end:
-                        raise ValueError(f"Invalid range: {part}")
-                    indices_to_rotate.update(range(start, end + 1))
-                else:
-                    idx = int(part) - 1
-                    if idx < 0 or idx >= total_pages:
-                        raise ValueError(f"Invalid page: {part}")
-                    indices_to_rotate.add(idx)
+            indices_to_rotate = {
+                index
+                for _, indices in _parse_page_ranges(pages_spec, total_pages)
+                for index in indices
+            }
 
         writer = PdfWriter()
         for i, page in enumerate(reader.pages):
@@ -683,7 +539,7 @@ def rotate_pdf_task(self, job_id):
 
     except Exception as e:
         job.status = "failed"
-        job.error_message = str(e)
+        job.error_message = _friendly_error(e)
         job.save(update_fields=["status", "error_message"])
         raise
 
@@ -771,7 +627,7 @@ def pdf_to_jpg_task(self, job_id):
 
     except Exception as e:
         job.status = "failed"
-        job.error_message = str(e)
+        job.error_message = _friendly_error(e)
         job.save(update_fields=["status", "error_message"])
         raise
 
@@ -873,7 +729,7 @@ def jpg_to_pdf_task(self, job_id):
 
     except Exception as e:
         job.status = "failed"
-        job.error_message = str(e)
+        job.error_message = _friendly_error(e)
         job.save(update_fields=["status", "error_message"])
         raise
 
@@ -889,7 +745,10 @@ def protect_pdf_task(self, job_id):
       - allow_printing: bool (default True)
       - allow_copying: bool (default True)
     """
+    import secrets
+
     from pypdf import PdfReader, PdfWriter
+    from pypdf.constants import UserAccessPermissions
 
     try:
         job = Job.objects.get(id=job_id)
@@ -917,7 +776,7 @@ def protect_pdf_task(self, job_id):
 
         r = _redis.from_url(_os.getenv("REDIS_URL", "redis://localhost:6379/0"))
         redis_key = f"pdf_password:{job.id}"
-        password = (r.get(redis_key) or b"").decode("utf-8").strip()
+        password = (r.get(redis_key) or b"").decode("utf-8")
         r.delete(redis_key)   # clean up immediately after reading
 
         allow_printing = (job.options or {}).get("allow_printing", True)
@@ -929,19 +788,26 @@ def protect_pdf_task(self, job_id):
             raise ValueError("Password must be at least 4 characters.")
 
         reader = PdfReader(str(input_path))
+        if reader.is_encrypted:
+            raise ValueError("This PDF already has a password. Unlock it first.")
         _check_page_count(reader)
-        writer = PdfWriter()
+        writer = PdfWriter(clone_from=reader)
 
-        for page in reader.pages:
-            writer.add_page(page)
+        permissions = UserAccessPermissions.all()
+        if not allow_printing:
+            permissions &= ~(
+                UserAccessPermissions.PRINT | UserAccessPermissions.PRINT_TO_REPRESENTATION
+            )
+        if not allow_copying:
+            permissions &= ~UserAccessPermissions.EXTRACT
 
+        # A separate random owner password is what makes the restrictions real:
+        # opening with the owner password bypasses them.
         writer.encrypt(
             user_password=password,
-            owner_password=password,
-            permissions_flag=(
-                (0b0100 if allow_printing else 0)
-                | (0b0001 if allow_copying else 0)
-            ),
+            owner_password=secrets.token_urlsafe(32),
+            permissions_flag=permissions,
+            algorithm="AES-256",
         )
 
         output_name = f"{uuid.uuid4().hex}.pdf"
@@ -964,7 +830,7 @@ def protect_pdf_task(self, job_id):
 
     except Exception as e:
         job.status = "failed"
-        job.error_message = str(e)
+        job.error_message = _friendly_error(e)
         job.save(update_fields=["status", "error_message"])
         raise
 
@@ -1007,17 +873,19 @@ def unlock_pdf_task(self, job_id):
 
         r = _redis.from_url(_os.getenv("REDIS_URL", "redis://localhost:6379/0"))
         redis_key = f"pdf_password:{job.id}"
-        password = (r.get(redis_key) or b"").decode("utf-8").strip()
+        password = (r.get(redis_key) or b"").decode("utf-8")
         r.delete(redis_key)
 
         reader = PdfReader(str(input_path))
 
         if reader.is_encrypted:
-            if not password:
-                raise ValueError("This PDF is password-protected. Enter the password.")
-            result = reader.decrypt(password)
-            if result == 0:
-                raise ValueError("Incorrect password.")
+            # Permission-only PDFs open with an empty password, so try it
+            # rather than demanding one.
+            if reader.decrypt(password) == 0:
+                raise ValueError(
+                    "Incorrect password." if password
+                    else "This PDF needs a password to open. Enter it and try again."
+                )
 
         _check_page_count(reader)
         writer = PdfWriter()
@@ -1044,7 +912,7 @@ def unlock_pdf_task(self, job_id):
 
     except Exception as e:
         job.status = "failed"
-        job.error_message = str(e)
+        job.error_message = _friendly_error(e)
         job.save(update_fields=["status", "error_message"])
         raise
 
@@ -1062,10 +930,7 @@ def watermark_pdf_task(self, job_id):
       - color: hex "#RRGGBB" (default: "#FF0000")
       - position: "center" | "diagonal" (default: "diagonal")
     """
-    import io
-    from reportlab.pdfgen import canvas as rl_canvas
     from reportlab.lib.colors import HexColor
-    from reportlab.lib.pagesizes import letter
     from pypdf import PdfReader, PdfWriter
 
     try:
@@ -1092,6 +957,8 @@ def watermark_pdf_task(self, job_id):
         text = str(options.get("text", "")).strip()
         if not text:
             raise ValueError("Watermark text is required.")
+        if not is_watermark_text_supported(text):
+            raise ValueError(WATERMARK_TEXT_ERROR)
 
         font_size = int(options.get("font_size", 60))
         opacity = float(options.get("opacity", 0.3))
@@ -1113,48 +980,22 @@ def watermark_pdf_task(self, job_id):
         _check_page_count(reader)
         writer = PdfWriter()
 
-        for page in reader.pages:
-            # Get page dimensions (in points)
-            page_width = float(page.mediabox.width)
-            page_height = float(page.mediabox.height)
-
-            # Create a transparent overlay PDF the same size as this page
-            packet = io.BytesIO()
-            can = rl_canvas.Canvas(packet, pagesize=(page_width, page_height))
-
-            can.saveState()
-            try:
-                can.setFillAlpha(opacity)
-            except Exception:
-                pass
-
-            can.setFillColor(color)
-            can.setFont("Helvetica-Bold", font_size)
-
+        def draw(canvas, width, height):
+            canvas.saveState()
+            canvas.setFillAlpha(opacity)
+            canvas.setFillColor(color)
+            canvas.setFont("Helvetica-Bold", font_size)
+            text_width = canvas.stringWidth(text, "Helvetica-Bold", font_size)
             if position == "diagonal":
-                # Rotate 45° and draw from bottom-left to top-right
-                can.translate(page_width / 2, page_height / 2)
-                can.rotate(45)
-                text_width = can.stringWidth(text, "Helvetica-Bold", font_size)
-                can.drawString(-text_width / 2, -font_size / 3, text)
+                canvas.translate(width / 2, height / 2)
+                canvas.rotate(45)
+                canvas.drawString(-text_width / 2, -font_size / 3, text)
             else:
-                # Center horizontally and vertically
-                text_width = can.stringWidth(text, "Helvetica-Bold", font_size)
-                can.drawString(
-                    (page_width - text_width) / 2,
-                    (page_height - font_size) / 2,
-                    text,
-                )
+                canvas.drawString((width - text_width) / 2, (height - font_size) / 2, text)
+            canvas.restoreState()
 
-            can.restoreState()
-            can.save()
-            packet.seek(0)
-
-            overlay = PdfReader(packet)
-            overlay_page = overlay.pages[0]
-
-            # Merge overlay onto the current page
-            page.merge_page(overlay_page)
+        for page in reader.pages:
+            _stamp_page(page, draw)
             writer.add_page(page)
 
         output_name = f"{uuid.uuid4().hex}.pdf"
@@ -1177,7 +1018,7 @@ def watermark_pdf_task(self, job_id):
 
     except Exception as e:
         job.status = "failed"
-        job.error_message = str(e)
+        job.error_message = _friendly_error(e)
         job.save(update_fields=["status", "error_message"])
         raise
 
@@ -1197,8 +1038,6 @@ def page_numbers_task(self, job_id):
       - font_size: int (default: 12)
       - margin: int in points (default: 40)
     """
-    import io
-    from reportlab.pdfgen import canvas as rl_canvas
     from reportlab.lib.colors import HexColor
     from pypdf import PdfReader, PdfWriter
 
@@ -1245,12 +1084,8 @@ def page_numbers_task(self, job_id):
         writer = PdfWriter()
 
         for idx, page in enumerate(reader.pages):
-            page_width = float(page.mediabox.width)
-            page_height = float(page.mediabox.height)
-
             current_num = start + idx
 
-            # Build the text
             if fmt == "number":
                 label = str(current_num)
             elif fmt == "page-n":
@@ -1258,34 +1093,20 @@ def page_numbers_task(self, job_id):
             else:  # n-of-total
                 label = f"{current_num} / {total_pages + start - 1}"
 
-            # Overlay PDF
-            packet = io.BytesIO()
-            can = rl_canvas.Canvas(packet, pagesize=(page_width, page_height))
-            can.setFont("Helvetica", font_size)
-            can.setFillColor(HexColor("#000000"))
+            def draw(canvas, width, height, label=label):
+                canvas.setFont("Helvetica", font_size)
+                canvas.setFillColor(HexColor("#000000"))
+                text_width = canvas.stringWidth(label, "Helvetica", font_size)
+                if "left" in position:
+                    x = margin
+                elif "right" in position:
+                    x = width - margin - text_width
+                else:
+                    x = (width - text_width) / 2
+                y = height - margin if position.startswith("top") else margin
+                canvas.drawString(x, y, label)
 
-            text_width = can.stringWidth(label, "Helvetica", font_size)
-
-            # X position
-            if "left" in position:
-                x = margin
-            elif "right" in position:
-                x = page_width - margin - text_width
-            else:  # center
-                x = (page_width - text_width) / 2
-
-            # Y position
-            if position.startswith("top"):
-                y = page_height - margin
-            else:  # bottom
-                y = margin
-
-            can.drawString(x, y, label)
-            can.save()
-            packet.seek(0)
-
-            overlay = PdfReader(packet)
-            page.merge_page(overlay.pages[0])
+            _stamp_page(page, draw)
             writer.add_page(page)
 
         output_name = f"{uuid.uuid4().hex}.pdf"
@@ -1308,7 +1129,7 @@ def page_numbers_task(self, job_id):
 
     except Exception as e:
         job.status = "failed"
-        job.error_message = str(e)
+        job.error_message = _friendly_error(e)
         job.save(update_fields=["status", "error_message"])
         raise
 
@@ -1396,7 +1217,7 @@ def organize_pdf_task(self, job_id):
 
     except Exception as e:
         job.status = "failed"
-        job.error_message = str(e)
+        job.error_message = _friendly_error(e)
         job.save(update_fields=["status", "error_message"])
         raise
 
@@ -1413,6 +1234,7 @@ def crop_pdf_task(self, job_id):
     The crop box shrinks from all four sides.
     """
     from pypdf import PdfReader, PdfWriter
+    from pypdf.generic import RectangleObject
 
     try:
         job = Job.objects.get(id=job_id)
@@ -1460,24 +1282,25 @@ def crop_pdf_task(self, job_id):
         writer = PdfWriter()
         for idx, page in enumerate(reader.pages):
             if idx in targets:
-                # mediabox = (left, bottom, right, top) in PDF coordinates
-                mb = page.mediabox
-                new_left = float(mb.left) + left
-                new_right = float(mb.right) - right
-                new_bottom = float(mb.bottom) + bottom
-                new_top = float(mb.top) - top
+                # Measure from the area the user sees, as they see it.
+                box_left, box_bottom, width, height = _visible_box(page)
+                new_left = box_left + left
+                new_right = box_left + width - right
+                new_bottom = box_bottom + bottom
+                new_top = box_bottom + height - top
 
                 if new_right <= new_left or new_top <= new_bottom:
                     raise ValueError(
                         f"Crop too large for page {idx + 1} "
-                        f"(page is {float(mb.width):.0f}×{float(mb.height):.0f} pt)."
+                        f"(page is {width:.0f}×{height:.0f} pt)."
                     )
 
-                # Set cropbox AND mediabox so most viewers respect it
-                page.cropbox.lower_left = (new_left, new_bottom)
-                page.cropbox.upper_right = (new_right, new_top)
-                page.mediabox.lower_left = (new_left, new_bottom)
-                page.mediabox.upper_right = (new_right, new_top)
+                cropped = RectangleObject((new_left, new_bottom, new_right, new_top))
+                page.mediabox = cropped
+                page.cropbox = cropped
+                page.trimbox = cropped
+                page.bleedbox = cropped
+                page.artbox = cropped
 
             writer.add_page(page)
 
@@ -1501,7 +1324,7 @@ def crop_pdf_task(self, job_id):
 
     except Exception as e:
         job.status = "failed"
-        job.error_message = str(e)
+        job.error_message = _friendly_error(e)
         job.save(update_fields=["status", "error_message"])
         raise
 
@@ -1515,7 +1338,6 @@ def html_to_pdf_task(self, job_id):
     Options:
       - html: HTML string
     """
-    import io
     import ironpress
     from pypdf import PdfReader
 
@@ -1550,14 +1372,16 @@ def html_to_pdf_task(self, job_id):
         job.output_file = f"outputs/{output_name}"
         _check_output_size(Path(settings.MEDIA_ROOT) / job.output_file)
         job.completed_at = timezone.now()
-        job.save(update_fields=["status", "output_file", "completed_at"])
+        _release_text_payload(job, "html")
+        job.save(update_fields=["status", "output_file", "completed_at", "options"])
 
         return {"status": "completed"}
 
     except Exception as e:
         job.status = "failed"
-        job.error_message = str(e)
-        job.save(update_fields=["status", "error_message"])
+        job.error_message = _friendly_error(e)
+        _release_text_payload(job, "html")
+        job.save(update_fields=["status", "error_message", "options"])
         raise
 
 
@@ -1600,7 +1424,7 @@ def pdf_to_html_task(self, job_id):
         doc = fitz.open(str(input_path))
         try:
             total_pages = _check_page_count(doc)
-            html_output = _pdf_to_html_document(doc, layout)
+            html_output = render_html(doc, layout)
         finally:
             doc.close()
 
@@ -1624,7 +1448,7 @@ def pdf_to_html_task(self, job_id):
 
     except Exception as e:
         job.status = "failed"
-        job.error_message = str(e)
+        job.error_message = _friendly_error(e)
         job.save(update_fields=["status", "error_message"])
         # Re-raise so Celery marks this task as FAILED (visible in monitoring)
         raise
@@ -1639,7 +1463,6 @@ def markdown_to_pdf_task(self, job_id):
     Options:
       - markdown: Markdown string
     """
-    import io
     import ironpress
     from pypdf import PdfReader
 
@@ -1672,14 +1495,16 @@ def markdown_to_pdf_task(self, job_id):
         job.output_file = f"outputs/{output_name}"
         _check_output_size(Path(settings.MEDIA_ROOT) / job.output_file)
         job.completed_at = timezone.now()
-        job.save(update_fields=["status", "output_file", "completed_at"])
+        _release_text_payload(job, "markdown")
+        job.save(update_fields=["status", "output_file", "completed_at", "options"])
 
         return {"status": "completed"}
 
     except Exception as e:
         job.status = "failed"
-        job.error_message = str(e)
-        job.save(update_fields=["status", "error_message"])
+        job.error_message = _friendly_error(e)
+        _release_text_payload(job, "markdown")
+        job.save(update_fields=["status", "error_message", "options"])
         raise
 
 
@@ -1720,28 +1545,22 @@ def pdf_to_markdown_task(self, job_id):
             layout = "preserve"
 
         doc = fitz.open(str(input_path))
-        total_pages = _check_page_count(doc)
-
-        md_parts = []
-
         try:
+            total_pages = _check_page_count(doc)
             if layout == "preserve":
-                # PyMuPDF built-in markdown export — keeps headings, tables, links
-                for page in doc:
-                    md_parts.append(page.get_text("markdown"))
+                md_output = render_markdown(doc)
             else:
-                # Simple layout — plain text per page with page separators
+                # Simple layout: plain text per page with page separators
+                md_parts = []
                 for i, page in enumerate(doc):
                     text = page.get_text("text").strip()
-                    if not text:
-                        continue
-                    md_parts.append(f"## Page {i + 1}\n")
-                    md_parts.append(text)
-                    md_parts.append("")
+                    if text:
+                        md_parts.append(f"## Page {i + 1}\n\n{text}")
+                md_output = "\n\n".join(md_parts)
         finally:
             doc.close()
 
-        md_output = "\n\n".join(md_parts).strip()
+        md_output = md_output.strip()
         if not md_output:
             raise ValueError(
                 "No extractable text found. The PDF may be a scanned image "
@@ -1768,6 +1587,132 @@ def pdf_to_markdown_task(self, job_id):
 
     except Exception as e:
         job.status = "failed"
-        job.error_message = str(e)
+        job.error_message = _friendly_error(e)
         job.save(update_fields=["status", "error_message"])
         raise
+
+
+def _run_tool(job_id, work, extension, private_options=()):
+    """
+    Shared job lifecycle: `work(inputs, output, options)` does the document
+    work. `private_options` hold what the user typed (form values, redaction
+    terms), which must not stay in the database once the job ends.
+    """
+    try:
+        job = Job.objects.get(id=job_id)
+    except Job.DoesNotExist:
+        return {"error": "Job not found"}
+
+    upload_dir = Path(settings.MEDIA_ROOT) / "uploads"
+    output_dir = Path(settings.MEDIA_ROOT) / "outputs"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    inputs = [upload_dir / name for name in job.input_files]
+    output_name = f"{uuid.uuid4().hex}{extension}"
+    output_path = output_dir / output_name
+
+    try:
+        job.status = "processing"
+        job.save(update_fields=["status"])
+
+        for path in inputs:
+            if not path.exists():
+                raise FileNotFoundError(f"Input file missing: {path.name}")
+
+        result = work(inputs, output_path, job.options or {}) or {}
+        _check_output_size(output_path)
+
+        job.options = {
+            **{k: v for k, v in (job.options or {}).items() if k not in private_options},
+            **result,
+        }
+        job.status = "completed"
+        job.output_file = f"outputs/{output_name}"
+        job.completed_at = timezone.now()
+        job.save(update_fields=["status", "output_file", "completed_at", "options"])
+        return {"status": "completed"}
+    except Exception as e:
+        job.status = "failed"
+        job.error_message = _friendly_error(e)
+        job.options = {k: v for k, v in (job.options or {}).items() if k not in private_options}
+        job.save(update_fields=["status", "error_message", "options"])
+        output_path.unlink(missing_ok=True)
+        raise
+    finally:
+        # Sensitive documents shouldn't wait for the 2-hour sweep, even on failure.
+        for path in inputs:
+            path.unlink(missing_ok=True)
+
+
+def _page_tool(work):
+    """Resolve the user's page ranges, then run a page-selection operation."""
+    def run(inputs, output, options):
+        doc = pdf_tools.open_pdf(inputs[0])
+        total = doc.page_count
+        doc.close()
+        groups = _parse_page_ranges(options.get("pages", ""), total)
+        indices = [index for _, group in groups for index in group]
+        return work(inputs, output, {**options, "indices": indices})
+    return run
+
+
+@shared_task(bind=True, autoretry_for=(), max_retries=0)
+def pdf_to_word_task(self, job_id):
+    return _run_tool(job_id, pdf_tools.to_word, ".docx")
+
+
+@shared_task(bind=True, autoretry_for=(), max_retries=0)
+def pdf_to_excel_task(self, job_id):
+    return _run_tool(job_id, pdf_tools.to_excel, ".xlsx")
+
+
+@shared_task(bind=True, autoretry_for=(), max_retries=0)
+def pdf_to_powerpoint_task(self, job_id):
+    return _run_tool(job_id, pdf_tools.to_powerpoint, ".pptx")
+
+
+@shared_task(bind=True, autoretry_for=(), max_retries=0)
+def sign_pdf_task(self, job_id):
+    return _run_tool(job_id, pdf_tools.sign, ".pdf", private_options=("placements",))
+
+
+@shared_task(bind=True, autoretry_for=(), max_retries=0)
+def redact_pdf_task(self, job_id):
+    return _run_tool(
+        job_id, pdf_tools.redact, ".pdf", private_options=("terms", "patterns", "boxes")
+    )
+
+
+@shared_task(bind=True, autoretry_for=(), max_retries=0)
+def compare_pdf_task(self, job_id):
+    return _run_tool(job_id, pdf_tools.compare, ".pdf")
+
+
+@shared_task(bind=True, autoretry_for=(), max_retries=0)
+def repair_pdf_task(self, job_id):
+    return _run_tool(job_id, pdf_tools.repair, ".pdf")
+
+
+@shared_task(bind=True, autoretry_for=(), max_retries=0)
+def fill_form_task(self, job_id):
+    return _run_tool(job_id, pdf_tools.fill_form, ".pdf", private_options=("values",))
+
+
+@shared_task(bind=True, autoretry_for=(), max_retries=0)
+def remove_pages_task(self, job_id):
+    return _run_tool(job_id, _page_tool(pdf_tools.remove_pages), ".pdf")
+
+
+@shared_task(bind=True, autoretry_for=(), max_retries=0)
+def extract_pages_task(self, job_id):
+    return _run_tool(job_id, _page_tool(pdf_tools.extract_pages), ".pdf")
+
+
+@shared_task(bind=True, autoretry_for=(), max_retries=0)
+def office_to_pdf_task(self, job_id):
+    return _run_tool(job_id, office_tools.office_to_pdf, ".pdf")
+
+
+# OCR reads every page, so it gets more time than the global task limit.
+@shared_task(bind=True, autoretry_for=(), max_retries=0, soft_time_limit=570, time_limit=600)
+def ocr_pdf_task(self, job_id):
+    return _run_tool(job_id, office_tools.ocr, ".pdf")

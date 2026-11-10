@@ -1,367 +1,282 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowRight } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { ArrowRight, Download, FileQuestion, RotateCcw, Search, ShieldCheck } from "lucide-react";
+import { ToolIcon } from "@/components/ToolLayout";
 import { useAuth } from "@/context/AuthContext";
 import { apiFetch } from "@/lib/api";
-import { tools, getToolBySlug } from "@/lib/tools";
+import { getToolByJobKey, getToolBySlug, popularSlugs, Tool } from "@/lib/tools";
+import type { Job } from "@/lib/useToolJob";
 
-type Job = {
-    id: string;
-    tool: string;
-    status: "pending" | "processing" | "completed" | "failed";
-    output_file: string | null;
-    download_url: string | null;
-    error_message: string | null;
-    created_at: string;
-    completed_at: string | null;
+type History = {
+    jobs: Job[];
+    total: number;
+    this_week: number;
+    top_tools: { tool: string; count: number }[];
 };
 
-function getInitials(name: string): string {
-    const parts = name.trim().split(/[\s._-]+/);
-    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-    return (parts[0][0] + parts[1][0]).toUpperCase();
+type Filter = "all" | "ready" | "failed";
+
+const FILTERS: { id: Filter; label: string }[] = [
+    { id: "all", label: "All" },
+    { id: "ready", label: "Ready to download" },
+    { id: "failed", label: "Failed" },
+];
+
+function timeAgo(iso: string, now: number): string {
+    const minutes = Math.floor((now - new Date(iso).getTime()) / 60000);
+    if (minutes < 1) return "just now";
+    if (minutes < 60) return `${minutes} min ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours} hr ago`;
+    const days = Math.floor(hours / 24);
+    if (days < 7) return `${days} day${days > 1 ? "s" : ""} ago`;
+    return new Date(iso).toLocaleDateString();
 }
 
-function formatDate(iso: string): string {
-    const d = new Date(iso);
-    const now = new Date();
-    const diffMs = now.getTime() - d.getTime();
-    const diffMin = Math.floor(diffMs / 60000);
-    if (diffMin < 1) return "just now";
-    if (diffMin < 60) return `${diffMin}m ago`;
-    const diffHr = Math.floor(diffMin / 60);
-    if (diffHr < 24) return `${diffHr}h ago`;
-    const diffDay = Math.floor(diffHr / 24);
-    if (diffDay < 7) return `${diffDay}d ago`;
-    return d.toLocaleDateString();
+function timeLeft(iso: string, now: number): string {
+    const minutes = Math.max(1, Math.round((new Date(iso).getTime() - now) / 60000));
+    return minutes >= 60 ? `${Math.floor(minutes / 60)} hr ${minutes % 60} min` : `${minutes} min`;
 }
 
-// Map internal tool slug to tools.ts slug (they mostly match)
-function slugToToolSlug(slug: string): string {
-    const map: Record<string, string> = {
-        merge: "merge-pdf",
-        split: "split-pdf",
-        compress: "compress-pdf",
-        rotate: "rotate-pdf",
-        "pdf-to-jpg": "pdf-to-jpg",
-        "jpg-to-pdf": "jpg-to-pdf",
-        protect: "protect-pdf",
-        unlock: "unlock-pdf",
-        watermark: "watermark",
-        "page-numbers": "page-numbers",
-        organize: "organize-pdf",
-        crop: "crop-pdf",
-        "html-to-pdf": "html-to-pdf",
-        "pdf-to-html": "pdf-to-html",
-        "markdown-to-pdf": "markdown-to-pdf",
-        "pdf-to-markdown": "pdf-to-markdown",
-    };
-    return map[slug] || slug;
+function jobTitle(job: Job, tool?: Tool): string {
+    if (!job.source_name) return tool?.name ?? job.tool;
+    return job.source_count > 1 ? `${job.source_name} + ${job.source_count - 1} more` : job.source_name;
 }
 
-function getToolInfo(slug: string) {
-    const toolSlug = slugToToolSlug(slug);
-    const tool = getToolBySlug(toolSlug);
-    if (tool) {
-        return {
-            name: tool.name,
-            Icon: tool.icon,
-            color: tool.color,
-        };
-    }
-    return {
-        name: slug,
-        Icon: null,
-        color: "from-gray-500 to-gray-600",
-    };
+function Stat({ label, value, note }: { label: string; value: string | number; note: string }) {
+    return (
+        <div className="card p-4">
+            <p className="text-sm text-ink-2">{label}</p>
+            <p className="text-3xl font-semibold tracking-tight mt-1">{value}</p>
+            <p className="text-xs text-ink-3 mt-1">{note}</p>
+        </div>
+    );
+}
+
+function JobRow({ job, now }: { job: Job; now: number }) {
+    const tool = getToolByJobKey(job.tool);
+    const running = job.status === "pending" || job.status === "processing";
+
+    return (
+        <li className="flex items-center gap-3 px-4 py-3">
+            {tool ? (
+                <ToolIcon tool={tool} size="sm" />
+            ) : (
+                <FileQuestion className="w-9 h-9 p-2 text-ink-3" aria-hidden />
+            )}
+            <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium truncate">{jobTitle(job, tool)}</p>
+                <p className="text-xs text-ink-3 truncate">
+                    {job.source_name ? `${tool?.name} · ` : ""}
+                    {timeAgo(job.created_at, now)}
+                    {job.status === "failed" && job.error_message && (
+                        <span className="text-danger"> · {job.error_message}</span>
+                    )}
+                    {job.download_url && job.expires_at && ` · deleted in ${timeLeft(job.expires_at, now)}`}
+                    {job.status === "completed" && !job.download_url && " · file deleted"}
+                </p>
+            </div>
+            {job.download_url && (
+                <a href={job.download_url} className="btn btn-ghost !py-1.5 !px-2.5 !text-sm shrink-0" aria-label={`Download ${jobTitle(job, tool)}`}>
+                    <Download className="w-4 h-4" aria-hidden />
+                    <span className="hidden sm:inline">Download</span>
+                </a>
+            )}
+            {running && <span className="text-xs text-ink-3 shrink-0">Working…</span>}
+            {!job.download_url && !running && tool && (
+                <Link href={`/tools/${tool.slug}`} className="btn btn-ghost !py-1.5 !px-2.5 !text-sm shrink-0" aria-label={`Use ${tool.name} again`}>
+                    <RotateCcw className="w-4 h-4" aria-hidden />
+                    <span className="hidden sm:inline">Run again</span>
+                </Link>
+            )}
+        </li>
+    );
 }
 
 export default function DashboardPage() {
     const router = useRouter();
     const { user, usage, loading, refreshUsage } = useAuth();
 
-    const [jobs, setJobs] = useState<Job[]>([]);
-    const [totalJobs, setTotalJobs] = useState(0);
-    const [loadingJobs, setLoadingJobs] = useState(true);
+    const [history, setHistory] = useState<History | null>(null);
+    const [failedToLoad, setFailedToLoad] = useState(false);
+    const [filter, setFilter] = useState<Filter>("all");
+    const [query, setQuery] = useState("");
+    const [now, setNow] = useState(() => Date.now());
+
+    const load = useCallback(async () => {
+        try {
+            setHistory(await apiFetch<History>("/auth/my-jobs/"));
+            setFailedToLoad(false);
+        } catch {
+            setFailedToLoad(true);
+        }
+        setNow(Date.now());
+    }, []);
 
     useEffect(() => {
-        if (!loading && !user) {
-            router.push("/login");
-        }
+        if (!loading && !user) router.replace("/login");
     }, [user, loading, router]);
 
     useEffect(() => {
-        if (user) {
-            refreshUsage();
-            fetchJobs();
-        }
-    }, [user, refreshUsage]);
+        if (!user) return;
+        refreshUsage();
+        const first = setTimeout(load, 0);
+        return () => clearTimeout(first);
+    }, [user, refreshUsage, load]);
 
-    async function fetchJobs() {
-        setLoadingJobs(true);
-        try {
-            const data = await apiFetch<{ jobs: Job[]; total: number }>(
-                "/auth/my-jobs/"
-            );
-            setJobs(data.jobs);
-            setTotalJobs(data.total);
-        } catch {
-            // ignore
-        } finally {
-            setLoadingJobs(false);
-        }
-    }
+    // Keep countdowns honest, and pick up jobs that finish while we watch.
+    const anyRunning = history?.jobs.some((job) => job.status === "pending" || job.status === "processing");
+    useEffect(() => {
+        if (!user) return;
+        const timer = setInterval(load, anyRunning ? 3000 : 60000);
+        return () => clearInterval(timer);
+    }, [user, anyRunning, load]);
 
-    if (loading) {
+    const visible = useMemo(() => {
+        const needle = query.trim().toLowerCase();
+        return (history?.jobs ?? []).filter((job) => {
+            if (filter === "ready" && !job.download_url) return false;
+            if (filter === "failed" && job.status !== "failed") return false;
+            const tool = getToolByJobKey(job.tool);
+            return !needle || `${job.source_name ?? ""} ${tool?.name ?? ""}`.toLowerCase().includes(needle);
+        });
+    }, [history, filter, query]);
+
+    const quickTools = useMemo(() => {
+        const used = (history?.top_tools ?? []).map((item) => getToolByJobKey(item.tool));
+        const fallback = popularSlugs.map(getToolBySlug);
+        const unique = new Map<string, Tool>();
+        [...used, ...fallback].forEach((tool) => tool && unique.set(tool.slug, tool));
+        return [...unique.values()].slice(0, 6);
+    }, [history]);
+
+    if (loading || !user) {
         return (
-            <main className="min-h-screen mesh-bg flex items-center justify-center">
-                <div className="text-center">
-                    <div className="inline-block animate-spin rounded-full h-10 w-10 border-4 border-[#22396F] border-t-transparent mb-3"></div>
-                    <p className="text-[#0D1C42]/60 text-sm">Loading...</p>
-                </div>
+            <main className="max-w-6xl mx-auto px-4 sm:px-6 py-10 space-y-4" aria-busy="true">
+                <div className="skeleton h-9 w-64" />
+                <div className="skeleton h-28" />
+                <div className="skeleton h-72" />
             </main>
         );
     }
 
-    if (!user) return null;
-
-    const dailyUsed = usage?.used ?? 0;
-    const dailyLimit = usage?.limit ?? 20;
-    const dailyPercent = Math.min(100, (dailyUsed / dailyLimit) * 100);
+    const ready = history?.jobs.filter((job) => job.download_url).length ?? 0;
 
     return (
-        <main className="min-h-screen mesh-bg grain relative px-4 py-10">
-            {/* Decorative orbs */}
-            <div className="absolute top-20 right-[15%] w-[300px] h-[300px] rounded-full bg-[#4f7cff]/10 blur-[100px] pointer-events-none" />
-            <div className="absolute bottom-20 left-[10%] w-[300px] h-[300px] rounded-full bg-[#8b5cf6]/10 blur-[100px] pointer-events-none" />
+        <main className="max-w-6xl mx-auto px-4 sm:px-6 py-8 md:py-10">
+            <div className="flex flex-wrap items-end justify-between gap-3 mb-6">
+                <div>
+                    <h1 className="text-3xl font-semibold tracking-tight">Hi, {user.username}</h1>
+                    <p className="text-ink-2 mt-1">Your files and recent work, in one place.</p>
+                </div>
+                <Link href="/#tools" className="btn btn-primary">
+                    Start a new task
+                    <ArrowRight className="w-4 h-4" aria-hidden />
+                </Link>
+            </div>
 
-            <div className="relative max-w-5xl mx-auto">
-                {/* Welcome header */}
-                <div className="card p-6 md:p-8 mb-6 animate-fade-in">
-                    <div className="flex items-center gap-4 flex-wrap">
-                        <div className="relative">
-                            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[#010736] to-[#22396f] flex items-center justify-center text-[#FCF1D0] text-xl font-bold shadow-md">
-                                {getInitials(user.username)}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+                <Stat label="Files today" value={usage?.used ?? 0} note="No daily limit on your account" />
+                <Stat label="This week" value={history?.this_week ?? "–"} note="Tasks in the last 7 days" />
+                <Stat label="Last 30 days" value={history?.total ?? "–"} note="Tasks in your history" />
+                <Stat label="Ready to download" value={history ? ready : "–"} note="Files are kept for 2 hours" />
+            </div>
+
+            <div className="grid lg:grid-cols-[1fr_300px] gap-6 items-start">
+                <section className="card overflow-hidden" aria-labelledby="history">
+                    <div className="px-4 pt-4 pb-3 border-b border-line">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            <h2 id="history" className="font-semibold">
+                                Your files
+                            </h2>
+                            <div className="relative sm:w-56">
+                                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-3" aria-hidden />
+                                <input
+                                    type="search"
+                                    value={query}
+                                    onChange={(event) => setQuery(event.target.value)}
+                                    placeholder="Search files"
+                                    aria-label="Search your files"
+                                    className="input !py-1.5 !pl-8 !text-sm"
+                                />
                             </div>
-                            <div className="absolute -inset-1 rounded-2xl bg-gradient-to-br from-[#4f7cff] to-[#8b5cf6] opacity-20 blur-lg -z-10" />
                         </div>
-                        <div className="min-w-0 flex-1">
-                            <h1 className="text-2xl md:text-3xl font-bold tracking-tight text-[#010736] mb-0.5 truncate">
-                                Welcome back, {user.username}!
-                            </h1>
-                            <p className="text-[#0D1C42]/60 text-sm truncate">
-                                {user.email}
-                            </p>
-                        </div>
-                        {user.is_premium && (
-                            <span className="shrink-0 bg-gradient-to-br from-amber-400 to-amber-500 text-white text-xs font-bold px-3 py-1.5 rounded-full shadow-sm">
-                                ⭐ Premium
-                            </span>
-                        )}
-                    </div>
-                </div>
-
-                {/* Quick tools */}
-                <div className="mb-6">
-                    <div className="flex items-center justify-between mb-3">
-                        <h2 className="text-lg font-bold text-[#010736]">Quick tools</h2>
-                        <Link
-                            href="/"
-                            className="text-xs font-medium text-[#22396F] hover:underline"
-                        >
-                            View all →
-                        </Link>
-                    </div>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-                        {tools.slice(0, 12).map((tool) => {
-                            const Icon = tool.icon;
-                            return (
-                                <Link
-                                    key={tool.slug}
-                                    href={`/tools/${tool.slug}`}
-                                    className="card card-hover p-3 text-center group"
-                                >
-                                    <div className="relative inline-block mb-2">
-                                        <div
-                                            className={`w-10 h-10 mx-auto rounded-xl bg-gradient-to-br ${tool.color} flex items-center justify-center shadow-sm transition-transform duration-300 group-hover:scale-110`}
-                                        >
-                                            <Icon
-                                                className="w-4 h-4 text-white"
-                                                strokeWidth={2.5}
-                                            />
-                                        </div>
-                                        <div
-                                            className={`absolute inset-0 w-10 h-10 mx-auto rounded-xl bg-gradient-to-br ${tool.color} blur-md opacity-0 group-hover:opacity-60 transition-opacity -z-10`}
-                                        />
-                                    </div>
-                                    <div className="text-xs font-medium text-[#010736] leading-tight">
-                                        {tool.name}
-                                    </div>
-                                </Link>
-                            );
-                        })}
-                    </div>
-                </div>
-
-                {/* Stats grid */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-                    <div className="card p-6">
-                        <p className="text-xs uppercase tracking-wider text-[#0D1C42]/50 font-semibold mb-1">
-                            Files today
-                        </p>
-                        <p className="text-3xl font-bold text-[#010736] mb-3">
-                            {dailyUsed}
-                            <span className="text-lg text-[#0D1C42]/40"> / {dailyLimit}</span>
-                        </p>
-                        <div className="w-full bg-[#FCF1D0] rounded-full h-2 overflow-hidden border border-[#e5dcb8]">
-                            <div
-                                className={`h-full rounded-full transition-all duration-500 ${dailyPercent >= 100
-                                    ? "bg-gradient-to-r from-red-500 to-red-600"
-                                    : dailyPercent >= 80
-                                        ? "bg-gradient-to-r from-amber-400 to-amber-500"
-                                        : "bg-gradient-to-r from-[#0D1C42] to-[#22396F]"
+                        <div className="flex gap-1 mt-3 overflow-x-auto" role="group" aria-label="Filter files">
+                            {FILTERS.map((item) => (
+                                <button
+                                    key={item.id}
+                                    type="button"
+                                    aria-pressed={filter === item.id}
+                                    onClick={() => setFilter(item.id)}
+                                    className={`px-2.5 py-1 rounded-lg text-sm whitespace-nowrap transition-colors ${
+                                        filter === item.id ? "bg-ink text-white" : "text-ink-2 hover:bg-surface-2"
                                     }`}
-                                style={{ width: `${dailyPercent}%` }}
-                            />
-                        </div>
-                    </div>
-
-                    <div className="card p-6">
-                        <p className="text-xs uppercase tracking-wider text-[#0D1C42]/50 font-semibold mb-1">
-                            Total files
-                        </p>
-                        <p className="text-3xl font-bold text-[#010736]">{totalJobs}</p>
-                        <p className="text-xs text-[#0D1C42]/50 mt-3">
-                            All-time processed
-                        </p>
-                    </div>
-
-                    <div className="card p-6">
-                        <p className="text-xs uppercase tracking-wider text-[#0D1C42]/50 font-semibold mb-1">
-                            Plan
-                        </p>
-                        <p className="text-3xl font-bold text-[#010736]">
-                            {user.is_premium ? "Premium" : "Free"}
-                        </p>
-                        <p className="text-xs text-[#0D1C42]/50 mt-3">
-                            {dailyLimit} files per day
-                        </p>
-                    </div>
-                </div>
-
-                {/* Recent files */}
-                <div className="card p-6">
-                    <div className="flex items-center justify-between mb-4">
-                        <h2 className="text-lg font-bold text-[#010736]">
-                            Your recent files
-                        </h2>
-                        <button
-                            onClick={fetchJobs}
-                            className="text-xs font-medium text-[#22396F] hover:underline"
-                        >
-                            Refresh
-                        </button>
-                    </div>
-
-                    {loadingJobs ? (
-                        <div className="space-y-3 py-2">
-                            {[1, 2, 3].map((i) => (
-                                <div key={i} className="flex items-center gap-3">
-                                    <div className="w-10 h-10 skeleton rounded-xl" />
-                                    <div className="flex-1 space-y-2">
-                                        <div className="h-3 skeleton rounded w-1/3" />
-                                        <div className="h-2 skeleton rounded w-1/4" />
-                                    </div>
-                                </div>
+                                >
+                                    {item.label}
+                                </button>
                             ))}
                         </div>
-                    ) : jobs.length === 0 ? (
-                        <div className="text-center py-10">
-                            <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-[#FCF1D0] border border-[#e5dcb8] mb-4">
-                                <ArrowRight className="w-6 h-6 text-[#0D1C42]/40" />
-                            </div>
-                            <p className="text-[#0D1C42]/60 text-sm mb-4">
-                                No files yet. Start using a tool to see them here.
-                            </p>
-                            <Link
-                                href="/"
-                                className="inline-flex btn-primary text-sm"
-                            >
-                                <span>Browse tools</span>
-                                <ArrowRight className="w-4 h-4 ml-2" />
+                    </div>
+
+                    {failedToLoad && !history ? (
+                        <div className="p-10 text-center">
+                            <p className="text-ink-2 mb-4">We couldn&apos;t load your files.</p>
+                            <button type="button" onClick={load} className="btn btn-ghost">
+                                Try again
+                            </button>
+                        </div>
+                    ) : !history ? (
+                        <div className="p-4 space-y-3" aria-busy="true">
+                            {[1, 2, 3].map((row) => (
+                                <div key={row} className="skeleton h-10" />
+                            ))}
+                        </div>
+                    ) : history.jobs.length === 0 ? (
+                        <div className="p-10 text-center">
+                            <p className="font-medium mb-1">Nothing here yet</p>
+                            <p className="text-sm text-ink-2 mb-4">Files you process will show up here.</p>
+                            <Link href="/#tools" className="btn btn-dark">
+                                Browse tools
                             </Link>
                         </div>
+                    ) : visible.length === 0 ? (
+                        <p className="p-10 text-center text-sm text-ink-2">No files match.</p>
                     ) : (
-                        <ul className="divide-y divide-[#e5dcb8]/60">
-                            {jobs.map((job) => {
-                                const info = getToolInfo(job.tool);
-                                const Icon = info.Icon;
-                                const isReady =
-                                    job.status === "completed" && job.download_url;
-
-                                return (
-                                    <li
-                                        key={job.id}
-                                        className="py-3 flex items-center gap-3 first:pt-0 last:pb-0"
-                                    >
-                                        <div
-                                            className={`w-10 h-10 rounded-xl bg-gradient-to-br ${info.color} flex items-center justify-center shrink-0 shadow-sm`}
-                                        >
-                                            {Icon ? (
-                                                <Icon
-                                                    className="w-4 h-4 text-white"
-                                                    strokeWidth={2.5}
-                                                />
-                                            ) : (
-                                                <span className="text-white text-xs">?</span>
-                                            )}
-                                        </div>
-                                        <div className="flex-1 min-w-0">
-                                            <p className="font-medium text-sm text-[#010736] truncate">
-                                                {info.name}
-                                            </p>
-                                            <p className="text-xs text-[#0D1C42]/60">
-                                                {formatDate(job.created_at)}
-                                                <span
-                                                    className={`ml-2 font-medium ${job.status === "completed"
-                                                        ? "text-emerald-600"
-                                                        : job.status === "failed"
-                                                            ? "text-red-600"
-                                                            : "text-amber-600"
-                                                        }`}
-                                                >
-                                                    • {job.status}
-                                                </span>
-                                            </p>
-                                        </div>
-                                        {isReady ? (
-                                            <a
-                                                href={job.download_url!}
-                                                className="text-xs font-semibold bg-gradient-to-br from-emerald-500 to-emerald-600 hover:brightness-110 text-white px-3 py-1.5 rounded-lg transition-all shadow-sm hover:shadow-md whitespace-nowrap"
-                                            >
-                                                Download
-                                            </a>
-                                        ) : job.status === "failed" ? (
-                                            <span
-                                                className="text-xs text-red-500 font-medium"
-                                                title={job.error_message || ""}
-                                            >
-                                                Failed
-                                            </span>
-                                        ) : (
-                                            <span className="text-xs text-[#0D1C42]/40 font-medium">
-                                                Processing
-                                            </span>
-                                        )}
-                                    </li>
-                                );
-                            })}
+                        <ul className="divide-y divide-line">
+                            {visible.map((job) => (
+                                <JobRow key={job.id} job={job} now={now} />
+                            ))}
                         </ul>
                     )}
-                </div>
+                </section>
+
+                <aside className="space-y-4">
+                    <section className="card p-4" aria-labelledby="quick-tools">
+                        <h2 id="quick-tools" className="font-semibold mb-3">
+                            {history?.top_tools.length ? "Your tools" : "Popular tools"}
+                        </h2>
+                        <ul className="space-y-1">
+                            {quickTools.map((tool) => (
+                                <li key={tool.slug}>
+                                    <Link
+                                        href={`/tools/${tool.slug}`}
+                                        className="flex items-center gap-2.5 p-1.5 -mx-1.5 rounded-lg hover:bg-surface-2 transition-colors"
+                                    >
+                                        <ToolIcon tool={tool} size="sm" />
+                                        <span className="text-sm font-medium">{tool.name}</span>
+                                    </Link>
+                                </li>
+                            ))}
+                        </ul>
+                    </section>
+                    <p className="flex gap-2 text-xs text-ink-2 leading-relaxed px-1">
+                        <ShieldCheck className="w-4 h-4 shrink-0 text-ink-3" aria-hidden />
+                        Files are deleted automatically after 2 hours. We keep only this list for 30 days.
+                    </p>
+                </aside>
             </div>
         </main>
     );

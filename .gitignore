@@ -28,3 +28,6 @@ Thumbs.db
 # Media (dev only)
 backend/media/
 backend/staticfiles/
+# Celery beat runtime state
+backend/celerybeat-schedule*
+*.stackdump

@@ -1,19 +1,22 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/context/AuthContext";
+import Footer from "@/components/Footer";
 import Navbar from "@/components/Navbar";
+import { SITE_URL } from "@/lib/seo";
 
-const inter = Inter({
-  variable: "--font-inter",
-  subsets: ["latin"],
-  display: "swap",
-});
+const geist = Geist({ variable: "--font-geist", subsets: ["latin"], display: "swap" });
+const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"], display: "swap" });
 
 export const metadata: Metadata = {
-  title: "GrayPDF — Every PDF Tool in One Place",
+  metadataBase: new URL(SITE_URL),
+  title: {
+    default: "GreyPDF: free online PDF tools",
+    template: "%s | GreyPDF",
+  },
   description:
-    "Merge, split, compress, convert, and organize PDF files. Free, fast, and private. No signup required.",
+    "Merge, split, compress, convert and protect PDFs for free. No signup needed for your first 10 files a day, and unlimited with a free account.",
 };
 
 export default function RootLayout({
@@ -22,11 +25,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={inter.variable}>
-      <body className="antialiased min-h-screen">
+    <html lang="en" className={`${geist.variable} ${geistMono.variable}`}>
+      <body className="antialiased min-h-screen flex flex-col">
         <AuthProvider>
           <Navbar />
-          {children}
+          <div className="flex-1">{children}</div>
+          <Footer />
         </AuthProvider>
       </body>
     </html>

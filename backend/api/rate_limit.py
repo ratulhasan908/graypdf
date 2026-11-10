@@ -1,8 +1,9 @@
 """
-Rate limiting for GrayPDF.
+Rate limiting for GreyPDF.
 
-Guests: N requests per day (Redis, keyed by IP).
-Logged-in users: effectively unlimited (DB counter, still tracked for analytics).
+Guests: GUEST_DAILY_LIMIT files per day (Redis, keyed by IP).
+Logged-in users: unlimited when USER_DAILY_LIMIT is None (the DB counter is
+still kept for analytics).
 
 All dates are UTC to keep behavior consistent across servers.
 """
@@ -72,7 +73,7 @@ def check_and_increment_guest(request, increment_by=1):
 
     Raises a 503 if Redis is unavailable so guest limits cannot be bypassed.
     """
-    limit = getattr(settings, "GUEST_DAILY_LIMIT", 5)
+    limit = getattr(settings, "GUEST_DAILY_LIMIT", 10)
     if increment_by < 1:
         raise ValueError("increment_by must be positive.")
 
@@ -113,9 +114,9 @@ def check_and_increment_user(user, increment_by=1):
     For authenticated users. Uses SELECT ... FOR UPDATE to make the
     counter update atomic across concurrent requests.
 
-    Returns (allowed: bool, used: int, limit: int).
+    Returns (allowed: bool, used: int, limit: int | None).
     """
-    limit = getattr(settings, "USER_DAILY_LIMIT", 999999)
+    limit = getattr(settings, "USER_DAILY_LIMIT", None)
     today = _utc_today()
     if increment_by < 1:
         raise ValueError("increment_by must be positive.")
@@ -131,7 +132,7 @@ def check_and_increment_user(user, increment_by=1):
             locked.daily_upload_count = 0
             locked.last_upload_reset = today
 
-        if locked.daily_upload_count + increment_by > limit:
+        if limit is not None and locked.daily_upload_count + increment_by > limit:
             locked.save(update_fields=["daily_upload_count", "last_upload_reset"])
             return False, locked.daily_upload_count, limit
 
@@ -146,12 +147,30 @@ def check_and_increment_user(user, increment_by=1):
         return True, locked.daily_upload_count, limit
 
 
+def check_guest_preview_rate(request):
+    """
+    Previews don't count as processed files, but they do cost CPU, so guests
+    get a separate hourly allowance. Returns True when the request may proceed.
+    """
+    limit = getattr(settings, "GUEST_PREVIEWS_PER_HOUR", 60)
+    key = f"guest_previews:{_get_client_ip(request)}"
+    try:
+        r = _get_redis()
+        used = r.incr(key)
+        if used == 1:
+            r.expire(key, 60 * 60)
+    except redis.RedisError as e:
+        logger.error("Redis error in preview rate limit: %s", e)
+        raise RateLimitUnavailable() from e
+    return used <= limit
+
+
 def get_usage(request):
     """
     Read-only usage snapshot for the current caller. Never raises.
     """
     if request.user.is_authenticated:
-        limit = getattr(settings, "USER_DAILY_LIMIT", 999999)
+        limit = getattr(settings, "USER_DAILY_LIMIT", None)
         today = _utc_today()
         used = (
             request.user.daily_upload_count
@@ -161,11 +180,11 @@ def get_usage(request):
         return {
             "used": used,
             "limit": limit,
-            "remaining": max(0, limit - used),
+            "remaining": None if limit is None else max(0, limit - used),
             "is_guest": False,
         }
 
-    limit = getattr(settings, "GUEST_DAILY_LIMIT", 5)
+    limit = getattr(settings, "GUEST_DAILY_LIMIT", 10)
     ip = _get_client_ip(request)
     day = _utc_day_key()
     key = f"guest_usage:{ip}:{day}"

@@ -269,20 +269,28 @@ DATA_UPLOAD_MAX_MEMORY_SIZE = 50 * 1024 * 1024   # 50 MB
 FILE_UPLOAD_MAX_MEMORY_SIZE = 50 * 1024 * 1024   # 50 MB
 
 FILE_RETENTION_HOURS = 2
+JOB_HISTORY_DAYS = 30  # how long signed-in users see past jobs (no files kept)
 
 MAX_PDF_PAGES = 500
 MAX_PROCESSING_SECONDS = 120
 MAX_OUTPUT_SIZE_MB = 200
 MAX_UPLOAD_FILE_SIZE = 50 * 1024 * 1024
 MAX_TOTAL_UPLOAD_SIZE = 200 * 1024 * 1024
+MAX_TEXT_INPUT_CHARS = 2_000_000  # pasted HTML / Markdown
+MAX_PREVIEW_PAGES = 200
+MAX_SIGNATURE_BYTES = 5 * 1024 * 1024
+OFFICE_TIMEOUT_SECONDS = 180
+MAX_OCR_PAGES = 100
+OCR_TIMEOUT_SECONDS = 540  # must stay under the OCR task's soft time limit
 
 
 # ============================================================================
 # Rate limits
 # ============================================================================
 
-GUEST_DAILY_LIMIT = 5
-USER_DAILY_LIMIT = 20
+GUEST_DAILY_LIMIT = 10
+USER_DAILY_LIMIT = None  # None = unlimited for signed-in users
+GUEST_PREVIEWS_PER_HOUR = 60  # page previews are free but use CPU
 
 # Number of trusted reverse proxies in front of Django.
 # Set to 1 for a single nginx/Cloudflare setup; leave 0 in dev.

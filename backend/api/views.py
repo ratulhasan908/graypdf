@@ -1,10 +1,30 @@
+import base64
+import json
+import math
 import os
 import uuid
-from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
+
+import pymupdf
+from PIL import Image
 
 # from .tasks import merge_pdf_task, split_pdf_task, compress_pdf_task, rotate_pdf_task, pdf_to_jpg_task, jpg_to_pdf_task, protect_pdf_task, unlock_pdf_task
 from .tasks import (
+    WATERMARK_TEXT_ERROR,
+    compare_pdf_task,
+    extract_pages_task,
+    ocr_pdf_task,
+    office_to_pdf_task,
+    fill_form_task,
+    is_watermark_text_supported,
+    pdf_to_excel_task,
+    pdf_to_powerpoint_task,
+    pdf_to_word_task,
+    redact_pdf_task,
+    remove_pages_task,
+    repair_pdf_task,
+    sign_pdf_task,
     merge_pdf_task,
     split_pdf_task,
     compress_pdf_task,
@@ -22,16 +42,25 @@ from .tasks import (
     markdown_to_pdf_task,
     pdf_to_markdown_task,
 )
-from .rate_limit import check_and_increment_guest, check_and_increment_user, get_usage
+from .office_tools import MAX_OCR_LANGUAGES, OCR_LANGUAGES, office_file_problem
+from .pdf_tools import list_form_fields
+from .rate_limit import (
+    check_and_increment_guest,
+    check_and_increment_user,
+    check_guest_preview_rate,
+    get_usage,
+)
 
 from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
+from django.db.models import Count
 from django.http import FileResponse
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 from kombu.exceptions import OperationalError
 
@@ -39,6 +68,50 @@ from .models import Job
 from .serializers import RegisterSerializer, JobSerializer
 
 User = get_user_model()
+
+DOWNLOAD_TYPES = {
+    "pdf": "application/pdf",
+    "zip": "application/zip",
+    "html": "text/html; charset=utf-8",
+    "md": "text/markdown; charset=utf-8",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+}
+
+DOWNLOAD_SUFFIXES = {
+    "merge": "merged",
+    "split": "split",
+    "compress": "compressed",
+    "rotate": "rotated",
+    "pdf-to-jpg": "images",
+    "jpg-to-pdf": "converted",
+    "protect": "protected",
+    "unlock": "unlocked",
+    "watermark": "watermarked",
+    "page-numbers": "numbered",
+    "organize": "organized",
+    "crop": "cropped",
+    "html-to-pdf": "converted",
+    "pdf-to-html": "converted",
+    "markdown-to-pdf": "converted",
+    "pdf-to-markdown": "converted",
+    "pdf-to-word": "converted",
+    "pdf-to-excel": "converted",
+    "pdf-to-powerpoint": "converted",
+    "sign": "signed",
+    "redact": "redacted",
+    "compare": "comparison",
+    "repair": "repaired",
+    "fill-form": "filled",
+    "remove-pages": "edited",
+    "extract-pages": "extracted",
+    "word-to-pdf": "converted",
+    "excel-to-pdf": "converted",
+    "powerpoint-to-pdf": "converted",
+    "ocr": "searchable",
+}
+
 
 # ---------- Helpers ----------
 
@@ -63,7 +136,16 @@ def _set_jwt_cookies(response, refresh_token):
 
 
 
-def _enqueue_job(task, job):
+def _enqueue_job(task, job, request):
+    files = request.FILES.getlist("files")
+    if files:
+        job.options = {
+            **(job.options or {}),
+            "source_name": files[0].name[:200],
+            "source_count": len(files),
+        }
+        job.save(update_fields=["options"])
+
     try:
         task.delay(str(job.id))
     except OperationalError as exc:
@@ -94,13 +176,27 @@ def _validate_upload_sizes(files):
     return None
 
 
+def _validate_text_input(value, label):
+    if not isinstance(value, str) or not value.strip():
+        return Response(
+            {"detail": f"{label} content is required."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if len(value) > settings.MAX_TEXT_INPUT_CHARS:
+        return Response(
+            {"detail": f"{label} content is too long."},
+            status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+        )
+    return None
+
+
 # ---------- Auth endpoints ----------
 
 @api_view(["GET"])
 def health_check(request):
     return Response({
         "status": "ok",
-        "service": "GrayPDF API",
+        "service": "GreyPDF API",
         "version": "0.1.0",
     })
 
@@ -135,9 +231,8 @@ def login(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    try:
-        user_obj = User.objects.get(email=email)
-    except User.DoesNotExist:
+    user_obj = User.objects.filter(email__iexact=str(email).strip()).first()
+    if user_obj is None:
         return Response(
             {"detail": "Invalid credentials."},
             status=status.HTTP_401_UNAUTHORIZED,
@@ -164,6 +259,13 @@ def login(request):
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def logout(request):
+    refresh_str = request.COOKIES.get("refresh_token")
+    if refresh_str:
+        try:
+            RefreshToken(refresh_str).blacklist()
+        except TokenError:
+            pass  # already expired or revoked
+
     response = Response({"message": "Logged out."})
     response.delete_cookie("access_token", path="/")
     response.delete_cookie("refresh_token", path="/")
@@ -178,13 +280,20 @@ def me(request):
             status=status.HTTP_401_UNAUTHORIZED,
         )
     usage = get_usage(request)
-    return Response({
+    response = Response({
         "id": request.user.id,
         "email": request.user.email,
         "username": request.user.username,
         "is_premium": request.user.is_premium,
         "usage": usage,
     })
+
+    # Signed in through the refresh cookie: the access token lapsed, so rotate
+    # the pair. Active users stay signed in past the refresh lifetime this way.
+    if isinstance(request.auth, RefreshToken):
+        request.auth.blacklist()
+        _set_jwt_cookies(response, RefreshToken.for_user(request.user))
+    return response
 
 
 # ---------- Tool: Merge PDF ----------
@@ -237,7 +346,7 @@ def merge_pdf(request):
         return Response(
             {
                 "detail": f"Daily limit reached ({limit} files/day). "
-                          f"{'Sign up for more.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
+                          f"{'Sign up free for unlimited use.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
                 "used": used,
                 "limit": limit,
             },
@@ -266,7 +375,7 @@ def merge_pdf(request):
     )
 
     # Enqueue Celery task. Do not leave a job pending when the broker is down.
-    _enqueue_job(merge_pdf_task, job)
+    _enqueue_job(merge_pdf_task, job, request)
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -335,24 +444,15 @@ def job_download(request, job_id):
             status=status.HTTP_404_NOT_FOUND,
         )
 
-    # Choose extension + MIME based on tool
-    if job.tool in ("split", "pdf-to-jpg"):
-        extension = "zip"
-        mime = "application/zip"
-    elif job.tool == "pdf-to-html":
-        extension = "html"
-        mime = "text/html; charset=utf-8"
-    elif job.tool == "pdf-to-markdown":
-        extension = "md"
-        mime = "text/markdown"
-    else:
-        extension = "pdf"
-        mime = "application/pdf"
+    extension = file_path.suffix.lstrip(".").lower()
+    mime = DOWNLOAD_TYPES.get(extension, "application/octet-stream")
 
+    source_name = (job.options or {}).get("source_name") or "document"
+    suffix = DOWNLOAD_SUFFIXES.get(job.tool, job.tool)
     return FileResponse(
         open(file_path, "rb"),
         as_attachment=True,
-        filename=f"graypdf-{job.tool}-{job.id}.{extension}",
+        filename=f"{Path(source_name).stem}-{suffix}.{extension}",
         content_type=mime,
     )
 
@@ -395,7 +495,7 @@ def split_pdf(request):
         return Response(
             {
                 "detail": f"Daily limit reached ({limit} files/day). "
-                          f"{'Sign up for more.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
+                          f"{'Sign up free for unlimited use.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
                 "used": used,
                 "limit": limit,
             },
@@ -422,7 +522,7 @@ def split_pdf(request):
         options={"mode": mode, "ranges": ranges},
     )
 
-    _enqueue_job(split_pdf_task, job)
+    _enqueue_job(split_pdf_task, job, request)
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -479,7 +579,7 @@ def compress_pdf(request):
         return Response(
             {
                 "detail": f"Daily limit reached ({limit} files/day). "
-                          f"{'Sign up for more.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
+                          f"{'Sign up free for unlimited use.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
                 "used": used,
                 "limit": limit,
             },
@@ -506,7 +606,7 @@ def compress_pdf(request):
         options={"quality": quality},
     )
 
-    _enqueue_job(compress_pdf_task, job)
+    _enqueue_job(compress_pdf_task, job, request)
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -550,7 +650,7 @@ def rotate_pdf(request):
         return Response(
             {
                 "detail": f"Daily limit reached ({limit} files/day). "
-                          f"{'Sign up for more.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
+                          f"{'Sign up free for unlimited use.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
                 "used": used,
                 "limit": limit,
             },
@@ -583,7 +683,7 @@ def rotate_pdf(request):
         options={"angle": angle, "pages": pages_spec},
     )
 
-    _enqueue_job(rotate_pdf_task, job)
+    _enqueue_job(rotate_pdf_task, job, request)
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -627,7 +727,7 @@ def pdf_to_jpg(request):
         return Response(
             {
                 "detail": f"Daily limit reached ({limit} files/day). "
-                          f"{'Sign up for more.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
+                          f"{'Sign up free for unlimited use.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
                 "used": used,
                 "limit": limit,
             },
@@ -658,7 +758,7 @@ def pdf_to_jpg(request):
         options={"dpi": dpi},
     )
 
-    _enqueue_job(pdf_to_jpg_task, job)
+    _enqueue_job(pdf_to_jpg_task, job, request)
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -707,7 +807,7 @@ def jpg_to_pdf(request):
         return Response(
             {
                 "detail": f"Daily limit reached ({limit} files/day). "
-                          f"{'Sign up for more.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
+                          f"{'Sign up free for unlimited use.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
                 "used": used,
                 "limit": limit,
             },
@@ -740,7 +840,7 @@ def jpg_to_pdf(request):
         options={"page_size": page_size},
     )
 
-    _enqueue_job(jpg_to_pdf_task, job)
+    _enqueue_job(jpg_to_pdf_task, job, request)
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -774,8 +874,8 @@ def protect_pdf(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    password = request.data.get("password", "").strip()
-    if not password:
+    password = request.data.get("password", "")
+    if not password.strip():
         return Response(
             {"detail": "Password is required."},
             status=status.HTTP_400_BAD_REQUEST,
@@ -796,7 +896,7 @@ def protect_pdf(request):
         return Response(
             {
                 "detail": f"Daily limit reached ({limit} files/day). "
-                          f"{'Sign up for more.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
+                          f"{'Sign up free for unlimited use.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
                 "used": used,
                 "limit": limit,
             },
@@ -835,7 +935,7 @@ def protect_pdf(request):
     r = _redis.from_url(_os.getenv("REDIS_URL", "redis://localhost:6379/0"))
     r.setex(f"pdf_password:{job.id}", 300, password)
 
-    _enqueue_job(protect_pdf_task, job)
+    _enqueue_job(protect_pdf_task, job, request)
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -879,14 +979,14 @@ def unlock_pdf(request):
         return Response(
             {
                 "detail": f"Daily limit reached ({limit} files/day). "
-                          f"{'Sign up for more.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
+                          f"{'Sign up free for unlimited use.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
                 "used": used,
                 "limit": limit,
             },
             status=status.HTTP_429_TOO_MANY_REQUESTS,
         )
 
-    password = request.data.get("password", "").strip()
+    password = request.data.get("password", "")
 
     upload_dir = Path(settings.MEDIA_ROOT) / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
@@ -911,7 +1011,7 @@ def unlock_pdf(request):
     r = _redis.from_url(_os.getenv("REDIS_URL", "redis://localhost:6379/0"))
     r.setex(f"pdf_password:{job.id}", 300, password or "")
 
-    _enqueue_job(unlock_pdf_task, job)
+    _enqueue_job(unlock_pdf_task, job, request)
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -951,6 +1051,11 @@ def watermark_pdf(request):
             {"detail": "Watermark text is required."},
             status=status.HTTP_400_BAD_REQUEST,
         )
+    if not is_watermark_text_supported(text):
+        return Response(
+            {"detail": WATERMARK_TEXT_ERROR},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     # Rate limit
     if request.user.is_authenticated:
@@ -962,7 +1067,7 @@ def watermark_pdf(request):
         return Response(
             {
                 "detail": f"Daily limit reached ({limit} files/day). "
-                          f"{'Sign up for more.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
+                          f"{'Sign up free for unlimited use.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
                 "used": used,
                 "limit": limit,
             },
@@ -1010,7 +1115,7 @@ def watermark_pdf(request):
         },
     )
 
-    _enqueue_job(watermark_pdf_task, job)
+    _enqueue_job(watermark_pdf_task, job, request)
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -1054,7 +1159,7 @@ def page_numbers(request):
         return Response(
             {
                 "detail": f"Daily limit reached ({limit} files/day). "
-                          f"{'Sign up for more.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
+                          f"{'Sign up free for unlimited use.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
                 "used": used,
                 "limit": limit,
             },
@@ -1103,7 +1208,7 @@ def page_numbers(request):
         },
     )
 
-    _enqueue_job(page_numbers_task, job)
+    _enqueue_job(page_numbers_task, job, request)
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -1173,7 +1278,7 @@ def organize_pdf(request):
         return Response(
             {
                 "detail": f"Daily limit reached ({limit} files/day). "
-                          f"{'Sign up for more.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
+                          f"{'Sign up free for unlimited use.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
                 "used": used,
                 "limit": limit,
             },
@@ -1196,7 +1301,7 @@ def organize_pdf(request):
         options={"order": order},
     )
 
-    _enqueue_job(organize_pdf_task, job)
+    _enqueue_job(organize_pdf_task, job, request)
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -1209,9 +1314,8 @@ def pdf_page_count(request):
     Returns the number of pages in an uploaded PDF.
     Used by Organize UI to build the page grid.
 
-    This is a metadata read, not a processing job, so it's cheap. But
-    we still gate it with the same rate limit as full tool requests to
-    prevent scraping / abuse.
+    This is a metadata read, not a processing job, so it does not count
+    towards the daily file limit: Organize would otherwise charge twice.
     """
     from pypdf import PdfReader
 
@@ -1232,29 +1336,17 @@ def pdf_page_count(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    # Rate limit — same rules as tools, since this consumes compute
-    if request.user.is_authenticated:
-        allowed, used, limit = check_and_increment_user(request.user)
-    else:
-        allowed, used, limit = check_and_increment_guest(request)
-
-    if not allowed:
-        return Response(
-            {
-                "detail": f"Daily limit reached ({limit} files/day). "
-                          f"{'Sign up for more.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
-                "used": used,
-                "limit": limit,
-            },
-            status=status.HTTP_429_TOO_MANY_REQUESTS,
-        )
-
     try:
         reader = PdfReader(f)
+        if reader.is_encrypted and reader.decrypt("") == 0:
+            return Response(
+                {"detail": "This PDF is password-protected. Use Unlock PDF first."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         return Response({"pages": len(reader.pages)})
-    except Exception as e:
+    except Exception:
         return Response(
-            {"detail": f"Could not read PDF: {str(e)}"},
+            {"detail": "This file could not be read. It may be damaged or not a real PDF."},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -1300,7 +1392,7 @@ def crop_pdf(request):
         return Response(
             {
                 "detail": f"Daily limit reached ({limit} files/day). "
-                          f"{'Sign up for more.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
+                          f"{'Sign up free for unlimited use.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
                 "used": used,
                 "limit": limit,
             },
@@ -1356,7 +1448,7 @@ def crop_pdf(request):
         },
     )
 
-    _enqueue_job(crop_pdf_task, job)
+    _enqueue_job(crop_pdf_task, job, request)
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -1365,20 +1457,23 @@ def crop_pdf(request):
 @api_view(["GET"])
 def my_jobs(request):
     """
-    List the current user's recent jobs (or guest jobs by session — not
-    tracked, so guests get empty list). Returns up to 10 most recent.
+    The signed-in user's job history and stats for the dashboard.
+    Guests have no history, so they get an empty list.
     """
     if not request.user.is_authenticated:
-        return Response({"jobs": []})
+        return Response({"jobs": [], "total": 0, "this_week": 0, "top_tools": []})
 
-    jobs = Job.objects.filter(user=request.user)[:10]
-    serializer = JobSerializer(jobs, many=True, context={"request": request})
-
-    total = Job.objects.filter(user=request.user).count()
+    user_jobs = Job.objects.filter(user=request.user)
+    serializer = JobSerializer(user_jobs[:100], many=True, context={"request": request})
+    week_ago = timezone.now() - timedelta(days=7)
 
     return Response({
         "jobs": serializer.data,
-        "total": total,
+        "total": user_jobs.count(),
+        "this_week": user_jobs.filter(created_at__gte=week_ago).count(),
+        "top_tools": list(
+            user_jobs.values("tool").annotate(count=Count("id")).order_by("-count")[:6]
+        ),
     })
 
 
@@ -1393,13 +1488,10 @@ def html_to_pdf(request):
     from django.conf import settings
     from .tasks import html_to_pdf_task
 
-    html_content = request.data.get("html", "").strip()
-
-    if not html_content:
-        return Response(
-            {"detail": "HTML content is required."},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+    html_content = request.data.get("html", "")
+    text_error = _validate_text_input(html_content, "HTML")
+    if text_error:
+        return text_error
 
     # Rate limit
     if request.user.is_authenticated:
@@ -1411,7 +1503,7 @@ def html_to_pdf(request):
         return Response(
             {
                 "detail": f"Daily limit reached ({limit} files/day). "
-                          f"{'Sign up for more.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
+                          f"{'Sign up free for unlimited use.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
                 "used": used,
                 "limit": limit,
             },
@@ -1426,7 +1518,7 @@ def html_to_pdf(request):
         options={"html": html_content},
     )
 
-    _enqueue_job(html_to_pdf_task, job)
+    _enqueue_job(html_to_pdf_task, job, request)
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -1471,7 +1563,7 @@ def pdf_to_html(request):
         return Response(
             {
                 "detail": f"Daily limit reached ({limit} files/day). "
-                          f"{'Sign up for more.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
+                          f"{'Sign up free for unlimited use.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
                 "used": used,
                 "limit": limit,
             },
@@ -1498,7 +1590,7 @@ def pdf_to_html(request):
         options={"layout": layout},
     )
 
-    _enqueue_job(pdf_to_html_task, job)
+    _enqueue_job(pdf_to_html_task, job, request)
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -1514,11 +1606,9 @@ def markdown_to_pdf(request):
     from .tasks import markdown_to_pdf_task
 
     md_content = request.data.get("markdown", "")
-    if not isinstance(md_content, str) or not md_content.strip():
-        return Response(
-            {"detail": "Markdown content is required."},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+    text_error = _validate_text_input(md_content, "Markdown")
+    if text_error:
+        return text_error
 
     # Rate limit
     if request.user.is_authenticated:
@@ -1530,7 +1620,7 @@ def markdown_to_pdf(request):
         return Response(
             {
                 "detail": f"Daily limit reached ({limit} files/day). "
-                          f"{'Sign up for more.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
+                          f"{'Sign up free for unlimited use.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
                 "used": used,
                 "limit": limit,
             },
@@ -1545,7 +1635,7 @@ def markdown_to_pdf(request):
         options={"markdown": md_content},
     )
 
-    _enqueue_job(markdown_to_pdf_task, job)
+    _enqueue_job(markdown_to_pdf_task, job, request)
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -1589,7 +1679,7 @@ def pdf_to_markdown(request):
         return Response(
             {
                 "detail": f"Daily limit reached ({limit} files/day). "
-                          f"{'Sign up for more.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
+                          f"{'Sign up free for unlimited use.' if not request.user.is_authenticated else 'Try again tomorrow.'}",
                 "used": used,
                 "limit": limit,
             },
@@ -1616,7 +1706,7 @@ def pdf_to_markdown(request):
         options={"layout": layout},
     )
 
-    _enqueue_job(pdf_to_markdown_task, job)
+    _enqueue_job(pdf_to_markdown_task, job, request)
 
     serializer = JobSerializer(job, context={"request": request})
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -1653,11 +1743,14 @@ def refresh_token(request):
         User = get_user_model()
         user = User.objects.get(id=old_refresh["user_id"])
         new_refresh = RefreshToken.for_user(user)
-    except Exception as e:
-        return Response(
-            {"detail": f"Invalid refresh token: {str(e)}"},
+    except Exception:
+        response = Response(
+            {"detail": "Your session has expired. Please log in again."},
             status=status.HTTP_401_UNAUTHORIZED,
         )
+        response.delete_cookie("access_token", path="/")
+        response.delete_cookie("refresh_token", path="/")
+        return response
 
     secure = getattr(settings, "COOKIE_SECURE", False)
     samesite = getattr(settings, "COOKIE_SAMESITE", "Lax")
@@ -1682,3 +1775,349 @@ def refresh_token(request):
         path="/",
     )
     return response
+
+
+# ---------- Tools built on the shared job flow ----------
+
+def _bad_request(message):
+    return Response({"detail": message}, status=status.HTTP_400_BAD_REQUEST)
+
+
+def _pdf_upload_error(files, expected=1):
+    """Check a PDF upload. Returns an error Response, or None when it's fine."""
+    size_error = _validate_upload_sizes(files)
+    if size_error:
+        return size_error
+    if len(files) != expected:
+        noun = "1 PDF file" if expected == 1 else f"{expected} PDF files"
+        return _bad_request(f"Please upload exactly {noun}.")
+    for uploaded in files:
+        if not uploaded.name.lower().endswith(".pdf"):
+            return _bad_request(f"{uploaded.name} is not a PDF file.")
+    return None
+
+
+def _charge_usage(request, count):
+    """Count files against the daily limit. Returns a 429 Response when over."""
+    if request.user.is_authenticated:
+        allowed, used, limit = check_and_increment_user(request.user, increment_by=count)
+    else:
+        allowed, used, limit = check_and_increment_guest(request, increment_by=count)
+    if allowed:
+        return None
+    advice = "Try again tomorrow." if request.user.is_authenticated else "Sign up free for unlimited use."
+    return Response(
+        {"detail": f"Daily limit reached ({limit} files/day). {advice}", "used": used, "limit": limit},
+        status=status.HTTP_429_TOO_MANY_REQUESTS,
+    )
+
+
+def _store_upload(uploaded, extension):
+    upload_dir = Path(settings.MEDIA_ROOT) / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{uuid.uuid4().hex}{extension}"
+    with open(upload_dir / filename, "wb") as destination:
+        for chunk in uploaded.chunks():
+            destination.write(chunk)
+    return filename
+
+
+def _start_job(request, tool, task, options=None, expected_files=1, extra_uploads=()):
+    """Validate, charge and enqueue a PDF job. `extra_uploads` is (file, extension)."""
+    files = request.FILES.getlist("files")
+    error = _pdf_upload_error(files, expected_files) or _charge_usage(request, len(files))
+    if error:
+        return error
+
+    names = [_store_upload(uploaded, ".pdf") for uploaded in files]
+    names += [_store_upload(uploaded, extension) for uploaded, extension in extra_uploads]
+    job = Job.objects.create(
+        user=request.user if request.user.is_authenticated else None,
+        tool=tool,
+        status="pending",
+        input_files=names,
+        options=options or {},
+    )
+    _enqueue_job(task, job, request)
+    return Response(
+        JobSerializer(job, context={"request": request}).data,
+        status=status.HTTP_201_CREATED,
+    )
+
+
+def _json_field(request, name, default):
+    """Read a JSON value sent as a multipart field. Returns None when malformed."""
+    raw = request.data.get(name)
+    if raw in (None, ""):
+        return default
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _valid_boxes(items):
+    if not isinstance(items, list) or len(items) > 500:
+        return False
+    for item in items:
+        if not isinstance(item, dict):
+            return False
+        try:
+            int(item["page"])
+            for key in ("x", "y", "w", "h"):
+                if not math.isfinite(float(item[key])):
+                    return False
+        except (KeyError, TypeError, ValueError):
+            return False
+    return True
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def pdf_to_word(request):
+    return _start_job(request, "pdf-to-word", pdf_to_word_task)
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def pdf_to_excel(request):
+    return _start_job(request, "pdf-to-excel", pdf_to_excel_task)
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def pdf_to_powerpoint(request):
+    return _start_job(request, "pdf-to-powerpoint", pdf_to_powerpoint_task)
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def repair_pdf(request):
+    return _start_job(request, "repair", repair_pdf_task)
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def compare_pdf(request):
+    return _start_job(request, "compare", compare_pdf_task, expected_files=2)
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def remove_pages(request):
+    pages = str(request.data.get("pages", "")).strip()
+    if not pages:
+        return _bad_request("Choose the pages to remove.")
+    return _start_job(request, "remove-pages", remove_pages_task, {"pages": pages})
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def extract_pages(request):
+    pages = str(request.data.get("pages", "")).strip()
+    if not pages:
+        return _bad_request("Choose the pages to extract.")
+    return _start_job(request, "extract-pages", extract_pages_task, {"pages": pages})
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def sign_pdf(request):
+    placements = _json_field(request, "placements", [])
+    if not placements or not _valid_boxes(placements):
+        return _bad_request("Place your signature on a page first.")
+
+    signature = request.FILES.get("signature")
+    if signature is None:
+        return _bad_request("Add your signature first.")
+    if signature.size > settings.MAX_SIGNATURE_BYTES:
+        return _bad_request("Your signature image must be 5 MB or smaller.")
+    try:
+        with Image.open(signature) as image:
+            image.verify()
+            image_format = image.format
+    except Exception:
+        return _bad_request("The signature must be a PNG or JPG image.")
+    if image_format not in ("PNG", "JPEG"):
+        return _bad_request("The signature must be a PNG or JPG image.")
+    signature.seek(0)
+
+    extension = ".png" if image_format == "PNG" else ".jpg"
+    return _start_job(
+        request,
+        "sign",
+        sign_pdf_task,
+        {"placements": placements},
+        extra_uploads=[(signature, extension)],
+    )
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def redact_pdf(request):
+    terms = _json_field(request, "terms", [])
+    patterns = _json_field(request, "patterns", [])
+    boxes = _json_field(request, "boxes", [])
+    if (
+        not isinstance(terms, list)
+        or not all(isinstance(term, str) for term in terms)
+        or not isinstance(patterns, list)
+        or not set(patterns) <= {"email", "phone"}
+        or not _valid_boxes(boxes)
+    ):
+        return _bad_request("Those redaction settings aren't valid.")
+    if not any(term.strip() for term in terms) and not patterns and not boxes:
+        return _bad_request("Choose something to redact first.")
+    return _start_job(
+        request,
+        "redact",
+        redact_pdf_task,
+        {"terms": terms, "patterns": patterns, "boxes": boxes},
+    )
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def fill_form(request):
+    values = _json_field(request, "values", None)
+    if not isinstance(values, dict) or not values:
+        return _bad_request("Fill in at least one field.")
+    flatten = str(request.data.get("flatten", "false")).lower() == "true"
+    return _start_job(
+        request, "fill-form", fill_form_task, {"values": values, "flatten": flatten}
+    )
+
+
+def _start_office_job(request, kind, tool, options=None):
+    """Like _start_job, for Word, Excel and PowerPoint uploads."""
+    files = request.FILES.getlist("files")
+    size_error = _validate_upload_sizes(files)
+    if size_error:
+        return size_error
+    if len(files) != 1:
+        return _bad_request("Please upload exactly 1 file.")
+
+    uploaded = files[0]
+    head = uploaded.read(8)
+    uploaded.seek(0)
+    problem = office_file_problem(kind, uploaded.name, head)
+    if problem:
+        return _bad_request(problem)
+
+    error = _charge_usage(request, 1)
+    if error:
+        return error
+
+    job = Job.objects.create(
+        user=request.user if request.user.is_authenticated else None,
+        tool=tool,
+        status="pending",
+        input_files=[_store_upload(uploaded, Path(uploaded.name).suffix.lower())],
+        options=options or {},
+    )
+    _enqueue_job(office_to_pdf_task, job, request)
+    return Response(
+        JobSerializer(job, context={"request": request}).data,
+        status=status.HTTP_201_CREATED,
+    )
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def word_to_pdf(request):
+    return _start_office_job(request, "word", "word-to-pdf")
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def excel_to_pdf(request):
+    one_page = str(request.data.get("one_page_per_sheet", "false")).lower() == "true"
+    return _start_office_job(request, "excel", "excel-to-pdf", {"one_page_per_sheet": one_page})
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def powerpoint_to_pdf(request):
+    return _start_office_job(request, "powerpoint", "powerpoint-to-pdf")
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def ocr_pdf(request):
+    languages = _json_field(request, "languages", [])
+    if (
+        not isinstance(languages, list)
+        or not languages
+        or len(languages) > MAX_OCR_LANGUAGES
+        or not set(languages) <= OCR_LANGUAGES
+    ):
+        return _bad_request(f"Choose between 1 and {MAX_OCR_LANGUAGES} languages.")
+    return _start_job(request, "ocr", ocr_pdf_task, {"languages": languages})
+
+
+def _open_for_reading(request):
+    """Open an uploaded PDF in memory for a quick read. Returns (doc, error)."""
+    files = request.FILES.getlist("files")
+    error = _pdf_upload_error(files)
+    if error:
+        return None, error
+    if not request.user.is_authenticated and not check_guest_preview_rate(request):
+        return None, Response(
+            {"detail": "Too many previews. Please wait a while, or sign up free."},
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+    try:
+        doc = pymupdf.open(stream=files[0].read(), filetype="pdf")
+    except Exception:
+        return None, _bad_request("This file could not be read. It may be damaged or not a real PDF.")
+    if doc.needs_pass:
+        doc.close()
+        return None, _bad_request("This PDF is password-protected. Use Unlock PDF first.")
+    return doc, None
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def page_previews(request):
+    """
+    Page images for tools where people pick pages or point at them. Nothing is
+    stored, and this does not count towards the daily file limit.
+    """
+    doc, error = _open_for_reading(request)
+    if error:
+        return error
+    try:
+        dpi = int(request.data.get("dpi", 50))
+    except (TypeError, ValueError):
+        dpi = 50
+    dpi = max(30, min(dpi, 110))
+
+    try:
+        pages = []
+        for page in doc.pages(0, min(doc.page_count, settings.MAX_PREVIEW_PAGES)):
+            image = page.get_pixmap(dpi=dpi, alpha=False).tobytes("jpeg", jpg_quality=75)
+            pages.append({
+                "width": page.rect.width,
+                "height": page.rect.height,
+                "image": "data:image/jpeg;base64," + base64.b64encode(image).decode("ascii"),
+            })
+        return Response({"total": doc.page_count, "pages": pages})
+    except Exception:
+        return _bad_request("This file could not be read. It may be damaged or not a real PDF.")
+    finally:
+        doc.close()
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def form_fields(request):
+    """List a PDF's fillable fields. Nothing is stored."""
+    doc, error = _open_for_reading(request)
+    if error:
+        return error
+    try:
+        return Response({"fields": list_form_fields(doc)})
+    except Exception:
+        return _bad_request("This file could not be read. It may be damaged or not a real PDF.")
+    finally:
+        doc.close()
