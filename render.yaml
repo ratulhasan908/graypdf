@@ -26,8 +26,10 @@ services:
         value: https://greypdf.vercel.app
       - key: CSRF_TRUSTED_ORIGINS
         value: https://greypdf.vercel.app
+      # Requests arrive as visitor -> Vercel -> Cloudflare -> Render's router,
+      # so the visitor is the 4th address from the right in X-Forwarded-For.
       - key: TRUSTED_PROXY_COUNT
-        value: "0"
+        value: "3"
       # 512 MB of RAM: one web process, one job at a time, one OCR page at a time.
       - key: WEB_CONCURRENCY
         value: "1"
