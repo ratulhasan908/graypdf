@@ -119,6 +119,23 @@ DATABASES = {
     }
 }
 
+# Hosted databases (Neon, Supabase, ...) hand out one connection string, e.g.
+# postgresql://user:pass@host/db?sslmode=require. When it's set, it wins.
+if os.getenv("DATABASE_URL"):
+    from urllib.parse import parse_qsl, unquote, urlparse
+
+    _db = urlparse(os.environ["DATABASE_URL"])
+    DATABASES["default"].update(
+        NAME=_db.path.lstrip("/"),
+        USER=unquote(_db.username or ""),
+        PASSWORD=unquote(_db.password or ""),
+        HOST=_db.hostname,
+        PORT=str(_db.port or 5432),
+        OPTIONS=dict(parse_qsl(_db.query)),
+        CONN_MAX_AGE=60,
+        CONN_HEALTH_CHECKS=True,
+    )
+
 
 # ============================================================================
 # Authentication

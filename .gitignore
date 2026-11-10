@@ -31,3 +31,6 @@ backend/staticfiles/
 # Celery beat runtime state
 backend/celerybeat-schedule*
 *.stackdump
+
+# Production secrets for the Hugging Face Space
+.env.hf
