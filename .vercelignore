@@ -1,0 +1,10 @@
+# Vercel only builds frontend/. Keep everything else out of uploads.
+/backend
+/deploy
+/*.md
+/docker-compose.yml
+/render.yaml
+/.env*
+/frontend/node_modules
+/frontend/.next
+/frontend/.env*

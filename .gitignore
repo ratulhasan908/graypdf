@@ -34,3 +34,8 @@ backend/celerybeat-schedule*
 
 # Production secrets for the Hugging Face Space
 .env.hf
+.env.render
+
+.vercel
+.env*
+.admin-login.txt
