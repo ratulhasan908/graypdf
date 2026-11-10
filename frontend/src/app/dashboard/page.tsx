@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { ArrowRight, Download, FileQuestion, RotateCcw, Search, ShieldCheck } from "lucide-react";
 import { ToolIcon } from "@/components/ToolLayout";
 import { useAuth } from "@/context/AuthContext";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, apiUrl } from "@/lib/api";
 import { getToolByJobKey, getToolBySlug, popularSlugs, Tool } from "@/lib/tools";
 import type { Job } from "@/lib/useToolJob";
 
@@ -80,7 +80,7 @@ function JobRow({ job, now }: { job: Job; now: number }) {
                 </p>
             </div>
             {job.download_url && (
-                <a href={job.download_url} className="btn btn-ghost !py-1.5 !px-2.5 !text-sm shrink-0" aria-label={`Download ${jobTitle(job, tool)}`}>
+                <a href={apiUrl(job.download_url)} className="btn btn-ghost !py-1.5 !px-2.5 !text-sm shrink-0" aria-label={`Download ${jobTitle(job, tool)}`}>
                     <Download className="w-4 h-4" aria-hidden />
                     <span className="hidden sm:inline">Download</span>
                 </a>

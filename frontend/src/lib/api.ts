@@ -173,3 +173,8 @@ export function apiUpload<T>(
 export function getApiBaseUrl(): string {
     return API_BASE_URL;
 }
+
+/** The API sends download links as "/api/...". Point them at wherever the API lives. */
+export function apiUrl(path: string): string {
+    return path.startsWith("/api/") ? `${API_BASE_URL}${path.slice(4)}` : path;
+}

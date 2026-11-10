@@ -13,6 +13,7 @@ import {
     ShieldCheck,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
+import { apiUrl } from "@/lib/api";
 import { getToolBySlug, Tool, tools } from "@/lib/tools";
 import type { Job, ToolRun } from "@/lib/useToolJob";
 
@@ -107,7 +108,7 @@ function DonePanel({ run, tool, onReset }: { run: ToolRun; tool: Tool; onReset: 
 
                 <div className="flex flex-col sm:flex-row items-center justify-center gap-2">
                     {run.job?.download_url && (
-                        <a href={run.job.download_url} className="btn btn-primary btn-lg w-full sm:w-auto">
+                        <a href={apiUrl(run.job.download_url)} className="btn btn-primary btn-lg w-full sm:w-auto">
                             <Download className="w-5 h-5" aria-hidden />
                             Download
                         </a>

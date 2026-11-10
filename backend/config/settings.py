@@ -74,6 +74,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -160,8 +161,18 @@ USE_TZ = True
 # Static & media files
 # ============================================================================
 
-STATIC_URL = "/static/"
+# "/static/" would clash with the frontend when the site proxies the admin
+# through its own domain, so Django's files live under their own prefix.
+# WhiteNoise serves them from gunicorn; there's no separate web server for it.
+STATIC_URL = "/django-static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
+}
+
+# The admin lives at a path only the owner knows, not the well-known /admin/.
+ADMIN_URL = os.getenv("ADMIN_URL", "admin").strip("/") + "/"
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"

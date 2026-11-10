@@ -74,4 +74,5 @@ uharfbuzz==0.57.0
 urllib3==2.8.0
 vine==5.1.0
 wcwidth==0.8.4
+whitenoise==6.11.0
 xlsxwriter==3.3.1

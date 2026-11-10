@@ -1,0 +1,22 @@
+# HTTPS in front of the Django API. Caddy gets a free Let's Encrypt
+# certificate for API_DOMAIN on its own.
+{
+	servers {
+		# Visitors reach the API through the Vercel site, which sets
+		# X-Forwarded-For to their real IP. Keep that header so guest limits
+		# count people, not Vercel's servers.
+		trusted_proxies static 0.0.0.0/0 ::/0
+	}
+}
+
+{$API_DOMAIN} {
+	request_body {
+		max_size 60MB
+	}
+	reverse_proxy web:8000 {
+		transport http {
+			read_timeout 180s
+			write_timeout 180s
+		}
+	}
+}

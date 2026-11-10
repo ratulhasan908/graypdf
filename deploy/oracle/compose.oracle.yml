@@ -1,0 +1,30 @@
+# Production on one server, with the website on Vercel. From the repo root:
+#   docker compose -f docker-compose.yml -f deploy/oracle/compose.oracle.yml up -d --build caddy worker beat
+# That starts the API (web), the database, Redis, the worker, the scheduler
+# and Caddy. The frontend container is not started; Vercel serves the site.
+
+services:
+  web:
+    # Only Caddy talks to Django; nothing outside the server can reach 8000.
+    ports: !reset []
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      API_DOMAIN: ${API_DOMAIN:?Set API_DOMAIN in .env}
+    volumes:
+      - ./deploy/oracle/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [public]
+    depends_on:
+      - web
+
+volumes:
+  caddy_data:
+  caddy_config:

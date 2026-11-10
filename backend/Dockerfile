@@ -41,6 +41,10 @@ RUN pip install -r requirements.txt
 
 COPY . .
 
+# Admin CSS/JS, served by WhiteNoise. The key is a throwaway: collectstatic
+# only needs settings to load.
+RUN SECRET_KEY=collectstatic-only python manage.py collectstatic --noinput
+
 RUN useradd --create-home --uid 10001 greypdf \
     && mkdir -p /app/media/uploads /app/media/outputs \
     && chown -R greypdf:greypdf /app/media

@@ -73,9 +73,9 @@ class JobSerializer(serializers.ModelSerializer):
     def get_download_url(self, obj):
         expiry = self._expiry(obj)
         if expiry and expiry > timezone.now() and obj.output_file:
-            request = self.context.get("request")
-            if request:
-                return request.build_absolute_uri(f"/api/jobs/{obj.id}/download/")
+            # Relative on purpose: the site proxies /api/ through its own
+            # domain, so the browser sends the login cookie with the download.
+            return f"/api/jobs/{obj.id}/download/"
         return None
 
     def get_source_name(self, obj):
