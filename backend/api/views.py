@@ -2,6 +2,8 @@ import base64
 import json
 import math
 import os
+import re
+import shutil
 import uuid
 from datetime import timedelta
 from pathlib import Path
@@ -11,8 +13,10 @@ from PIL import Image
 
 # from .tasks import merge_pdf_task, split_pdf_task, compress_pdf_task, rotate_pdf_task, pdf_to_jpg_task, jpg_to_pdf_task, protect_pdf_task, unlock_pdf_task
 from .tasks import (
+    EDIT_ENGINE,
     WATERMARK_TEXT_ERROR,
     compare_pdf_task,
+    edit_pdf_task,
     extract_pages_task,
     ocr_pdf_task,
     office_to_pdf_task,
@@ -43,10 +47,12 @@ from .tasks import (
     pdf_to_markdown_task,
 )
 from .office_tools import MAX_OCR_LANGUAGES, OCR_LANGUAGES, office_file_problem
-from .pdf_tools import list_form_fields, render_page
+from . import edit_fonts
+from .pdf_tools import EDIT_TYPES, HEX_COLOR_RE, LINK_RE, list_form_fields, render_page, text_lines
 from .rate_limit import (
     check_and_increment_guest,
     check_and_increment_user,
+    check_guest_hourly,
     check_guest_preview_rate,
     get_usage,
 )
@@ -54,7 +60,7 @@ from .rate_limit import (
 from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
 from django.db.models import Count
-from django.http import FileResponse
+from django.http import FileResponse, HttpResponse
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
@@ -1974,6 +1980,339 @@ def redact_pdf(request):
         redact_pdf_task,
         {"terms": terms, "patterns": patterns, "boxes": boxes},
     )
+
+
+MAX_EDITS = 5000
+MAX_EDIT_IMAGES = 20
+MAX_EDIT_TEXT = 5000
+MAX_STROKE_POINTS = 5000
+MAX_EDIT_POINTS = 100_000
+MAX_REPLACES = 50
+INVALID_EDITS = "Those changes aren't valid. Reload the page and try again."
+SESSION_RE = re.compile(r"^[0-9a-f]{32}$")
+SESSION_GONE = "This editing session has expired. Open your PDF again to keep editing."
+
+
+def _finite(*values):
+    try:
+        return all(math.isfinite(float(value)) for value in values)
+    except (TypeError, ValueError):
+        return False
+
+
+def _has_page(item):
+    return _valid_boxes([{"page": item.get("page"), "x": 0, "y": 0, "w": 1, "h": 1}])
+
+
+def _edit_item_problem(item, image_count):
+    """What's wrong with one change, or None."""
+    if not isinstance(item, dict) or item.get("type") not in EDIT_TYPES:
+        return INVALID_EDITS
+    for key in ("color", "fill"):
+        if key in item and not HEX_COLOR_RE.match(str(item[key])):
+            return INVALID_EDITS
+    if not _finite(item.get("stroke", 1), item.get("size", 12), item.get("weight", 400)):
+        return INVALID_EDITS
+    kind = item["type"]
+    if kind == "replace":
+        find, replace = item.get("find"), item.get("replace", "")
+        if not isinstance(find, str) or not find.strip() or len(find) > 500:
+            return "Type the text you want to find."
+        if not isinstance(replace, str) or len(replace) > MAX_EDIT_TEXT:
+            return INVALID_EDITS
+        return None
+    if not _has_page(item):
+        return INVALID_EDITS
+    if kind == "text":
+        text, source, ref = item.get("text"), item.get("source"), item.get("ref")
+        family = item.get("family", "")
+        if not isinstance(text, str) or len(text) > MAX_EDIT_TEXT or not _finite(item.get("x"), item.get("baseline")):
+            return INVALID_EDITS
+        if not _finite(item.get("width", 0), item.get("grow", 0), item.get("cut", 0)) or not 0 <= float(item.get("width", 0)) <= 1 \
+                or not -5000 <= float(item.get("grow", 0)) <= 5000:
+            return INVALID_EDITS
+        if not isinstance(family, str) or (family and not edit_fonts.FAMILY_RE.match(family)):
+            return INVALID_EDITS
+        if ref is not None and (not isinstance(ref, int) or isinstance(ref, bool)):
+            return INVALID_EDITS
+        if source is not None and not (isinstance(source, dict) and _valid_boxes([{**source, "page": item["page"]}])):
+            return INVALID_EDITS
+    elif kind == "draw":
+        stroke = item.get("points")
+        if not isinstance(stroke, list) or not stroke or len(stroke) > MAX_STROKE_POINTS:
+            return INVALID_EDITS
+        if not all(isinstance(point, list) and len(point) == 2 and _finite(*point) for point in stroke):
+            return INVALID_EDITS
+    elif kind in ("line", "arrow"):
+        if not _finite(item.get("x1"), item.get("y1"), item.get("x2"), item.get("y2")):
+            return INVALID_EDITS
+    elif kind == "note":
+        if not isinstance(item.get("text"), str) or len(item["text"]) > MAX_EDIT_TEXT or not _finite(item.get("x"), item.get("y")):
+            return INVALID_EDITS
+    elif kind == "rotate-page":
+        if item.get("degrees") not in (90, 180, 270):
+            return INVALID_EDITS
+    elif kind == "delete-page":
+        pass
+    else:
+        if not _valid_boxes([item]):
+            return INVALID_EDITS
+        if kind == "link" and not LINK_RE.match(str(item.get("url", ""))):
+            return "Links must start with http://, https:// or mailto:."
+        if kind == "image":
+            index = item.get("image")
+            if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < image_count:
+                return "One of the images you added is missing. Add it again."
+    return None
+
+
+def _edit_problem(edits, image_count):
+    """Check the editor's list of changes. Returns a message, or None when fine."""
+    if not isinstance(edits, list) or not edits:
+        return "Make at least one change first."
+    if len(edits) > MAX_EDITS:
+        return f"That's more than {MAX_EDITS} changes. Save what you have, then edit the result."
+    for item in edits:
+        problem = _edit_item_problem(item, image_count)
+        if problem:
+            return problem
+    if sum(1 for item in edits if item["type"] == "replace") > MAX_REPLACES:
+        return f"Use at most {MAX_REPLACES} find & replace rules at a time."
+    if sum(len(item["points"]) for item in edits if item["type"] == "draw") > MAX_EDIT_POINTS:
+        return "Your drawings are too detailed. Save what you have, then edit the result."
+    return None
+
+
+def _image_extension(upload):
+    """'.png' or '.jpg' for a real PNG or JPG upload, otherwise None."""
+    try:
+        with Image.open(upload) as image:
+            image.verify()
+            image_format = image.format
+    except Exception:
+        return None
+    finally:
+        upload.seek(0)
+    return {"PNG": ".png", "JPEG": ".jpg"}.get(image_format)
+
+
+# ---- Editing sessions ------------------------------------------------------
+# The editor uploads a PDF once, then loads each page, font and search result
+# as it is needed, so documents of any length open quickly and the server
+# only ever draws the pages someone is looking at. Sessions are plain files in
+# media/uploads, so the regular 2-hour sweep removes them; using a session
+# keeps it alive.
+
+def _session_path(session):
+    if not isinstance(session, str) or not SESSION_RE.match(session):
+        return None
+    path = Path(settings.MEDIA_ROOT) / "uploads" / f"edit-{session}.pdf"
+    return path if path.exists() else None
+
+
+def _open_session(request, session):
+    """(doc, path, error) for a session, counting the request against guest limits."""
+    if not request.user.is_authenticated and not check_guest_hourly(
+        request, "edit", settings.GUEST_EDIT_REQUESTS_PER_HOUR
+    ):
+        return None, None, Response(
+            {"detail": "You're editing very fast. Wait a few minutes, or sign up free."},
+            status=status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+    path = _session_path(session)
+    if path is None:
+        return None, None, Response({"detail": SESSION_GONE}, status=status.HTTP_404_NOT_FOUND)
+    try:
+        os.utime(path)
+        return pymupdf.open(str(path)), path, None
+    except Exception:
+        return None, None, _bad_request("This file could not be read. It may be damaged or not a real PDF.")
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def edit_open(request):
+    """Start an editing session: store the PDF and describe its pages. Any length."""
+    doc, error = _open_for_reading(request)
+    if error:
+        return error
+    try:
+        pages = [[round(page.rect.width, 2), round(page.rect.height, 2)] for page in doc]
+    except Exception:
+        return _bad_request("This file could not be read. It may be damaged or not a real PDF.")
+    finally:
+        doc.close()
+    if not pages:
+        return _bad_request("This PDF has no pages.")
+    session = uuid.uuid4().hex
+    upload = request.FILES.getlist("files")[0]
+    upload.seek(0)
+    destination = Path(settings.MEDIA_ROOT) / "uploads"
+    destination.mkdir(parents=True, exist_ok=True)
+    with open(destination / f"edit-{session}.pdf", "wb") as handle:
+        for chunk in upload.chunks():
+            handle.write(chunk)
+    return Response({"session": session, "pages": pages})
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def edit_page(request, session, number):
+    """One page: its image, and with ?text=1 its lines of text and their fonts."""
+    doc, _path, error = _open_session(request, session)
+    if error:
+        return error
+    try:
+        if not 1 <= number <= doc.page_count:
+            return _bad_request(f"Page {number} does not exist in this PDF.")
+        try:
+            dpi = max(20, min(int(request.query_params.get("dpi", 110)), 150))
+        except ValueError:
+            dpi = 110
+        page = doc[number - 1]
+        # Positions must match what the edit job sees (it removes rotation too).
+        page.remove_rotation()
+        image = render_page(page, dpi).tobytes("jpeg", jpg_quality=78 if dpi > 60 else 60)
+        result = {
+            "width": page.rect.width,
+            "height": page.rect.height,
+            "image": "data:image/jpeg;base64," + base64.b64encode(image).decode("ascii"),
+        }
+        if request.query_params.get("text") == "1":
+            result["lines"] = text_lines(page)
+        return Response(result)
+    except Exception:
+        return _bad_request("This page could not be read.")
+    finally:
+        doc.close()
+
+
+def _font_response(data, family=None):
+    response = HttpResponse(data, content_type="font/otf")
+    response["Cache-Control"] = "private, max-age=7200"
+    if family:
+        response["X-Font-Family"] = family
+    return response
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def edit_font(request, session, xref):
+    """
+    An embedded font, rebuilt so the browser can show retyped text in it. It
+    covers the characters on the page being edited; the saved PDF uses every
+    character the document has.
+    """
+    doc, path, error = _open_session(request, session)
+    if error:
+        return error
+    try:
+        try:
+            number = int(request.query_params.get("page", 1))
+        except ValueError:
+            number = 1
+        if not 1 <= number <= doc.page_count or not 0 < xref < doc.xref_length():
+            return _bad_request("That font isn't in this PDF.")
+        cached = path.with_name(f"{path.stem}-font-{xref}-{number}.otf")
+        if cached.exists():
+            data = cached.read_bytes()
+        else:
+            data = edit_fonts.editable_font(doc, xref, pages=[number - 1]) or b""
+            cached.write_bytes(data)
+        if not data:
+            return Response({"detail": "This font can't be reused."}, status=status.HTTP_404_NOT_FOUND)
+        return _font_response(data)
+    finally:
+        doc.close()
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def edit_family_font(request):
+    """A complete font family (or its closest free match) for characters a subset lacks."""
+    if not request.user.is_authenticated and not check_guest_hourly(
+        request, "edit", settings.GUEST_EDIT_REQUESTS_PER_HOUR
+    ):
+        return Response({"detail": "Too many requests."}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+    family = request.query_params.get("family", "")
+    generic = request.query_params.get("generic", "sans")
+    if (family and not edit_fonts.FAMILY_RE.match(family)) or generic not in ("sans", "serif", "mono"):
+        return _bad_request("That isn't a font family name.")
+    try:
+        weight = int(request.query_params.get("weight", 400))
+    except ValueError:
+        weight = 400
+    italic = request.query_params.get("italic") == "1"
+    data, used = edit_fonts.family_font(family, weight, italic, generic)
+    if not data:
+        return Response({"detail": "No font available."}, status=status.HTTP_404_NOT_FOUND)
+    response = _font_response(data, used)
+    response["Cache-Control"] = "public, max-age=604800"
+    return response
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def edit_search(request, session):
+    """Where a word appears in the whole document: [{page, count}]."""
+    doc, _path, error = _open_session(request, session)
+    if error:
+        return error
+    find = request.query_params.get("q", "")
+    if not find.strip() or len(find) > 500:
+        doc.close()
+        return _bad_request("Type the text you want to find.")
+    case = request.query_params.get("case") == "1"
+    needle = find if case else find.lower()
+    try:
+        matches = []
+        for page in doc:
+            text = page.get_text()
+            count = (text if case else text.lower()).count(needle)
+            if count:
+                matches.append({"page": page.number + 1, "count": count})
+        return Response({"matches": matches, "total": sum(match["count"] for match in matches)})
+    finally:
+        doc.close()
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def edit_pdf(request):
+    """Save an editing session's changes as a new PDF (a background job)."""
+    path = _session_path(request.data.get("session"))
+    if path is None:
+        return _bad_request(SESSION_GONE)
+    edits = _json_field(request, "edits", [])
+    images = request.FILES.getlist("images")
+    if len(images) > MAX_EDIT_IMAGES:
+        return _bad_request(f"Add up to {MAX_EDIT_IMAGES} images at a time.")
+    problem = _edit_problem(edits, len(images))
+    if problem:
+        return _bad_request(problem)
+    uploads = []
+    for image in images:
+        extension = _image_extension(image)
+        if extension is None or image.size > settings.MAX_SIGNATURE_BYTES:
+            return _bad_request("Images must be PNG or JPG files of 5 MB or less.")
+        uploads.append((image, extension))
+
+    error = _charge_usage(request, 1)
+    if error:
+        return error
+    # The job gets its own copy, so the session can keep editing meanwhile.
+    pdf_name = f"{uuid.uuid4().hex}.pdf"
+    shutil.copyfile(path, path.with_name(pdf_name))
+    names = [pdf_name] + [_store_upload(image, extension) for image, extension in uploads]
+    job = Job.objects.create(
+        user=request.user if request.user.is_authenticated else None,
+        tool="edit",
+        status="pending",
+        input_files=names,
+        options={"edits": edits, "engine": EDIT_ENGINE},
+    )
+    _enqueue_job(edit_pdf_task, job, request)
+    return Response(JobSerializer(job, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
 
 @api_view(["POST"])

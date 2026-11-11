@@ -329,6 +329,11 @@ OCR_JOBS = max(1, int(os.getenv("OCR_JOBS", "2")))
 GUEST_DAILY_LIMIT = 10
 USER_DAILY_LIMIT = None  # None = unlimited for signed-in users
 GUEST_PREVIEWS_PER_HOUR = 60  # page previews are free but use CPU
+# The PDF editor loads each page, font and search on its own, so a long
+# document needs many small requests. This only stops automated abuse.
+GUEST_EDIT_REQUESTS_PER_HOUR = int(os.getenv("GUEST_EDIT_REQUESTS_PER_HOUR", "5000"))
+# Fetch complete font families from Google Fonts for retyped text (cached).
+EDIT_FONT_DOWNLOADS = os.getenv("EDIT_FONT_DOWNLOADS", "True").lower() == "true"
 
 # Number of trusted reverse proxies in front of Django.
 # Set to 1 for a single nginx/Cloudflare setup; leave 0 in dev.

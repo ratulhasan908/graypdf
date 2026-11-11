@@ -18,7 +18,7 @@ type SinglePdfToolProps = {
     onFile?: (file: File | null) => void;
     /** Add anything that isn't a plain field, such as a signature image. */
     extendBody?: (body: FormData) => Promise<void>;
-    wide?: boolean;
+    wide?: boolean | "xl";
     /** For tools that take something other than a PDF. */
     extensions?: string[];
     pickLabel?: string;

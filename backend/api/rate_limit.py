@@ -25,11 +25,21 @@ class RateLimitUnavailable(APIException):
     default_code = "rate_limit_unavailable"
 
 
+_redis_client = None
+
+
 def _get_redis():
-    """Lazy redis client from REDIS_URL."""
-    import os
-    url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-    return redis.from_url(url, decode_responses=True)
+    """
+    One redis client per process, from REDIS_URL. Its connection pool is
+    reused, so each request doesn't open a new connection (the PDF editor
+    makes many small requests).
+    """
+    global _redis_client
+    if _redis_client is None:
+        import os
+        url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        _redis_client = redis.from_url(url, decode_responses=True)
+    return _redis_client
 
 
 def _get_client_ip(request):
@@ -152,15 +162,19 @@ def check_guest_preview_rate(request):
     Previews don't count as processed files, but they do cost CPU, so guests
     get a separate hourly allowance. Returns True when the request may proceed.
     """
-    limit = getattr(settings, "GUEST_PREVIEWS_PER_HOUR", 60)
-    key = f"guest_previews:{_get_client_ip(request)}"
+    return check_guest_hourly(request, "previews", getattr(settings, "GUEST_PREVIEWS_PER_HOUR", 60))
+
+
+def check_guest_hourly(request, bucket, limit):
+    """Count one request in a guest's hourly `bucket`. True while under `limit`."""
+    key = f"guest_{bucket}:{_get_client_ip(request)}"
     try:
         r = _get_redis()
         used = r.incr(key)
         if used == 1:
             r.expire(key, 60 * 60)
     except redis.RedisError as e:
-        logger.error("Redis error in preview rate limit: %s", e)
+        logger.error("Redis error in %s rate limit: %s", bucket, e)
         raise RateLimitUnavailable() from e
     return used <= limit
 

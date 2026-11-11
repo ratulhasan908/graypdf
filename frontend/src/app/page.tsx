@@ -14,6 +14,7 @@ import {
     Tablet,
     Zap,
 } from "lucide-react";
+import EditSpotlight from "@/components/EditSpotlight";
 import HeroArt from "@/components/HeroArt";
 import HeroSearch from "@/components/HeroSearch";
 import ToolBrowser from "@/components/ToolBrowser";
@@ -40,7 +41,7 @@ const LANGUAGES = ["English", "বাংলা", "हिन्दी", "اردو
 const QUESTIONS = [
     {
         q: "Is GreyPDF really free?",
-        a: "Yes. All tools are free for everyone. Without an account you can process 10 files a day. With a free account there is no daily limit.",
+        a: "Yes. All tools are free for everyone, including the PDF editor that other apps charge for. Without an account you can process 10 files a day. With a free account there is no daily limit.",
     },
     {
         q: "Is there a subscription or paid plan?",
@@ -52,7 +53,7 @@ const QUESTIONS = [
     },
     {
         q: "How big can my files be?",
-        a: "Each file can be up to 50 MB, and one upload can be up to 200 MB in total. PDFs can have up to 500 pages.",
+        a: "Each file can be up to 50 MB, and one upload can be up to 200 MB in total. PDFs can have up to 500 pages, and the PDF editor has no page limit at all.",
     },
     {
         q: "Can it read scanned documents in Bangla?",
@@ -78,16 +79,18 @@ export default function HomePage() {
 
                 <div className="max-w-6xl mx-auto px-4 sm:px-6 pt-14 md:pt-24 text-center">
                     <Link
-                        href="/tools/word-to-pdf"
-                        className="glass-dark inline-flex items-center gap-2 rounded-full pl-1 pr-3 py-1 text-sm text-white/80 hover:text-white transition-colors rise"
+                        href="/tools/edit-pdf"
+                        className="group inline-flex rounded-full p-px bg-linear-to-r from-[#ff7a3d] via-[#e8287a] to-[#8b3df0] shadow-[0_10px_30px_-10px_rgba(232,40,122,0.7)] rise"
                     >
-                        <span className="inline-flex items-center gap-1 rounded-full bg-white text-ink text-xs font-semibold px-2 py-0.5">
-                            <Sparkles className="w-3 h-3 text-accent" aria-hidden />
-                            New
+                        <span className="inline-flex items-center gap-2 rounded-full bg-[#0b0a1c]/90 pl-1 pr-3 py-1 text-sm text-white/90 group-hover:text-white transition-colors">
+                            <span className="free-badge inline-flex items-center gap-1 rounded-full text-white text-xs font-semibold px-2 py-0.5">
+                                <Sparkles className="w-3 h-3" aria-hidden />
+                                New
+                            </span>
+                            <span className="sm:hidden">Edit PDF is free here</span>
+                            <span className="hidden sm:inline">Edit PDF is here, and it&apos;s free. Others charge for it.</span>
+                            <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" aria-hidden />
                         </span>
-                        <span className="sm:hidden">Office to PDF and OCR</span>
-                        <span className="hidden sm:inline">Word, Excel, PowerPoint to PDF and OCR are here</span>
-                        <ArrowRight className="w-3.5 h-3.5" aria-hidden />
                     </Link>
 
                     <h1 className="mt-7 font-semibold tracking-[-0.04em] leading-[0.98] text-[2.9rem] sm:text-7xl lg:text-[5.6rem] rise">
@@ -96,7 +99,7 @@ export default function HomePage() {
                         <span className="text-shine">Free. Fast. Private.</span>
                     </h1>
                     <p className="mt-6 text-lg md:text-xl text-white/65 max-w-2xl mx-auto leading-relaxed rise">
-                        Merge, split, compress, convert, sign and protect your PDFs in seconds, right in your browser.
+                        Edit, merge, split, compress, convert, sign and protect your PDFs in seconds, right in your browser.
                         No account needed.
                     </p>
 
@@ -161,6 +164,9 @@ export default function HomePage() {
             </section>
 
             <div className="max-w-6xl mx-auto px-4 sm:px-6">
+                {/* ---------- The free PDF editor, our headline feature ---------- */}
+                <EditSpotlight />
+
                 {/* ---------- Tools ---------- */}
                 <div className="pt-20 md:pt-24">
                     <ToolBrowser />

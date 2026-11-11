@@ -1,3 +1,4 @@
+import io
 import os
 import tempfile
 import time
@@ -18,7 +19,7 @@ from rest_framework.test import APIClient
 
 from rest_framework_simplejwt.exceptions import TokenError
 
-from . import pdf_tools
+from . import edit_fonts, pdf_tools
 from .office_tools import LIBREOFFICE_PROFILE, OLE_MAGIC, office_file_problem, office_to_pdf
 from .authentication import CookieJWTAuthentication
 from .pdf_structure import render_html, render_markdown
@@ -746,6 +747,540 @@ class PdfToolsTests(SimpleTestCase):
         filled = self._open(output)[0]
         self.assertIn("Ratul", filled.get_text())
         self.assertFalse(list(filled.widgets() or []))
+
+
+def _test_font(family="Testsans", glyphs="Invoice tal:0123456789USDp()"):
+    """A real TrueType font, built here so tests don't depend on installed fonts."""
+    from fontTools.fontBuilder import FontBuilder
+    from fontTools.pens.ttGlyphPen import TTGlyphPen
+
+    names = [".notdef", "space"] + [f"u{ord(char):04X}" for char in dict.fromkeys(glyphs.replace(" ", ""))]
+    builder = FontBuilder(1000, isTTF=True)
+    builder.setupGlyphOrder(names)
+    builder.setupCharacterMap({32: "space", **{ord(char): f"u{ord(char):04X}" for char in glyphs if char != " "}})
+    shapes = {}
+    for index, name in enumerate(names):
+        pen = TTGlyphPen(None)
+        if name != "space":
+            # Each glyph is a box of a different width, so glyphs are tellable apart.
+            right = 300 + index * 7
+            pen.moveTo((50, 0)); pen.lineTo((50, 700)); pen.lineTo((right, 700)); pen.lineTo((right, 0)); pen.closePath()
+        shapes[name] = pen.glyph()
+    builder.setupGlyf(shapes)
+    builder.setupHorizontalMetrics({name: (400 + index * 7, 50) for index, name in enumerate(names)})
+    builder.setupHorizontalHeader(ascent=800, descent=-200)
+    builder.setupNameTable({"familyName": family, "styleName": "Regular"})
+    builder.setupOS2(sTypoAscender=800, sTypoDescender=-200, usWinAscent=800, usWinDescent=200)
+    builder.setupPost()
+    output = io.BytesIO()
+    builder.save(output)
+    return output.getvalue()
+
+
+@override_settings(EDIT_FONT_DOWNLOADS=False)
+class PdfEditTests(SimpleTestCase):
+    """The PDF editor, run on real PDFs the way the browser drives it."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.folder = Path(directory.name)
+        media = override_settings(MEDIA_ROOT=str(self.folder / "media"))
+        media.enable()
+        self.addCleanup(media.disable)
+
+    def _open(self, path):
+        import pymupdf
+
+        doc = pymupdf.open(path)
+        self.addCleanup(doc.close)
+        return doc
+
+    def _invoice(self, embed=True):
+        """An invoice set in an embedded, subsetted TrueType font, like Word makes."""
+        import pymupdf
+
+        doc = pymupdf.open()
+        page = doc.new_page()
+        page.draw_rect(pymupdf.Rect(60, 80, 400, 140), color=None, fill=(0.85, 0.92, 1))
+        if embed:
+            page.insert_font(fontname="F1", fontbuffer=_test_font())
+            page.insert_text((72, 100), "Invoice total: 100 USD", fontname="F1", fontsize=12)
+        else:
+            page.insert_text((72, 100), "Invoice total: 100 USD", fontsize=12)
+        page.insert_text((72, 115), "Line just below stays", fontsize=12)
+        page.insert_text((72, 300), "Times bold heading", fontsize=20, fontname="tibo", color=(0.8, 0, 0))
+        doc.subset_fonts()
+        path = self.folder / "invoice.pdf"
+        doc.save(path)
+        doc.close()
+        return path
+
+    def _lines(self, path, number=0):
+        """What the editor gets for a page."""
+        page = self._open(path)[number]
+        page.remove_rotation()
+        return pdf_tools.text_lines(page)
+
+    def _line(self, path, start):
+        return next(line for line in self._lines(path) if line["text"].startswith(start))
+
+    def _retype(self, line, text):
+        """The change the browser sends after someone retypes a line."""
+        return {
+            "type": "text", "page": 1, "x": line["x"], "baseline": line["baseline"], "text": text,
+            "size": line["size"], "color": line["color"], **line["font"],
+            "source": {key: line[key] for key in ("x", "y", "w", "h")},
+        }
+
+    def _spans(self, path, number=0):
+        page = self._open(path)[number]
+        return [span for block in page.get_text("dict")["blocks"] for row in block.get("lines", []) for span in row["spans"]]
+
+    def test_lines_report_their_embedded_font(self):
+        source = self._invoice()
+        invoice = self._line(source, "Invoice")
+        heading = self._line(source, "Times")
+
+        self.assertIsInstance(invoice["font"]["ref"], int)
+        self.assertEqual(invoice["font"]["family"], "Testsans")
+        self.assertEqual((heading["font"]["weight"], heading["font"]["generic"], heading["size"]), (700, "serif", 20))
+        self.assertEqual(heading["color"], "#cc0000")
+
+    def test_embedded_subset_fonts_are_rebuilt_with_a_character_map(self):
+        from fontTools.ttLib import TTFont
+
+        source = self._invoice()
+        doc = self._open(source)
+        font = edit_fonts.editable_font(doc, self._line(source, "Invoice")["font"]["ref"])
+
+        mapped = set(TTFont(io.BytesIO(font)).getBestCmap())
+        self.assertTrue({ord(char) for char in "Invoice total:10USD"} <= mapped)
+        self.assertNotIn(ord("5"), mapped)  # unused glyphs in a subset are empty, so never mapped
+
+    def test_cff_fonts_are_rebuilt_too(self):
+        import pymupdf
+
+        doc = pymupdf.open()
+        page = doc.new_page()
+        page.insert_font(fontname="F0", fontbuffer=pymupdf.Font("tiro").buffer)  # MuPDF's own CFF font
+        page.insert_text((72, 100), "Invoice total", fontname="F0", fontsize=12)
+        doc.subset_fonts()
+        doc = pymupdf.open("pdf", doc.tobytes())
+        self.addCleanup(doc.close)
+        xref, ext = doc[0].get_fonts()[0][:2]
+
+        font = edit_fonts.editable_font(doc, xref)
+
+        self.assertIn(ext, ("cff", "cid"))
+        self.assertTrue({ord(char) for char in "Invoice total"} <= edit_fonts.coverage(font))
+
+    def test_retyped_line_keeps_its_font_place_and_neighbours(self):
+        source = self._invoice()
+        line = self._line(source, "Invoice")
+        output = self.folder / "out.pdf"
+
+        result = pdf_tools.edit([source], output, {"edits": [self._retype(line, "Invoice total: 10 USD (paid)")]})
+
+        text = self._open(output)[0].get_text()
+        self.assertEqual(result, {"edits": 1})
+        self.assertIn("Invoice total: 10 USD (paid)", text)
+        self.assertNotIn("100 USD", text)
+        self.assertIn("Line just below stays", text)
+        self.assertTrue(any(drawing.get("fill") for drawing in self._open(output)[0].get_drawings()))
+        spans = [span for span in self._spans(output) if span["text"].strip() and span["origin"][1] < 105]
+        # Characters the subset has come from the PDF's own font, on the old baseline.
+        self.assertTrue(all(span["font"].startswith("Testsans") for span in spans if "nvoice" in span["text"]))
+        for span in spans:
+            self.assertAlmostEqual(span["origin"][1], 100, delta=0.6)
+        self.assertAlmostEqual(min(span["origin"][0] for span in spans), 72, delta=0.6)
+
+    def test_characters_missing_from_the_subset_use_a_fallback_font(self):
+        source = self._invoice()
+        output = self.folder / "out.pdf"
+        line = self._line(source, "Invoice")
+
+        pdf_tools.edit([source], output, {"edits": [self._retype(line, "Invoice €5 মোট")]})
+
+        fonts = {span["font"] for span in self._spans(output) if span["origin"][1] < 105}
+        self.assertTrue(any(font.startswith("Testsans") for font in fonts), fonts)
+        self.assertTrue(any("Bengali" in font for font in fonts), fonts)
+
+    def test_unembedded_fonts_and_new_text_work(self):
+        source = self._invoice(embed=False)
+        output = self.folder / "out.pdf"
+        new = {"type": "text", "page": 1, "x": 0.1, "baseline": 0.5, "text": "New line\nSecond line",
+               "size": 14, "color": "#123456", "weight": 700, "italic": True, "family": "Helvetica",
+               "generic": "sans", "ref": None}
+
+        pdf_tools.edit([source], output, {"edits": [new, self._retype(self._line(source, "Invoice"), "Changed")]})
+
+        text = self._open(output)[0].get_text()
+        self.assertIn("New line", text)
+        self.assertIn("Second line", text)
+        self.assertIn("Changed", text)
+        first = next(span for span in self._spans(output) if span["text"].startswith("New"))
+        self.assertAlmostEqual(first["origin"][1], 0.5 * 842, delta=0.6)
+
+    def test_clearing_a_line_deletes_it(self):
+        source = self._invoice()
+        pdf_tools.edit([source], self.folder / "out.pdf", {"edits": [self._retype(self._line(source, "Times"), "")]})
+
+        text = self._open(self.folder / "out.pdf")[0].get_text()
+        self.assertNotIn("Times bold heading", text)
+        self.assertIn("Invoice total: 100 USD", text)
+
+    def test_lines_on_a_rotated_page_can_be_retyped(self):
+        import pymupdf
+
+        doc = pymupdf.open()
+        page = doc.new_page()
+        page.set_rotation(90)  # a landscape scan whose text still reads upright
+        page.insert_text(pymupdf.Point(72, 100) * page.derotation_matrix, "Invoice total: 100 USD", fontsize=12, rotate=90)
+        source = self.folder / "landscape.pdf"
+        doc.save(source)
+        output = self.folder / "out.pdf"
+
+        pdf_tools.edit([source], output, {"edits": [self._retype(self._line(source, "Invoice"), "Rotated but edited")]})
+
+        page = self._open(output)[0]
+        page.remove_rotation()
+        span = next(span for block in page.get_text("dict")["blocks"] for row in block.get("lines", []) for span in row["spans"])
+        self.assertEqual(span["text"], "Rotated but edited")
+        self.assertAlmostEqual(span["origin"][1], 100, delta=0.6)
+
+    def test_a_retyped_line_that_grows_pushes_everything_below_it_down(self):
+        source = self._invoice()
+        line = self._line(source, "Invoice")
+        grown = {**self._retype(line, "Invoice total:\nsecond line\nthird line"), "width": 0.6, "grow": 28.8}
+        highlight = {"type": "highlight", "page": 1, "x": 0.1, "y": 300 / 842 - 0.02, "w": 0.3, "h": 0.03}
+        output = self.folder / "out.pdf"
+
+        pdf_tools.edit([source], output, {"edits": [grown, highlight]})
+
+        page = self._open(output)[0]
+        origins = {span["text"].strip(): span["origin"][1] for span in self._spans(output) if span["text"].strip()}
+        self.assertAlmostEqual(origins["Line just below stays"], 115 + 28.8, delta=0.6)
+        self.assertAlmostEqual(origins["Times bold heading"], 300 + 28.8, delta=0.6)
+        self.assertIn("third line", page.get_text())
+        # The blue box behind the text grew to fit instead of breaking in two.
+        picture = page.get_pixmap(dpi=72)
+        blue, white = (216, 234, 255), (255, 255, 255)  # the box's fill (0.85, 0.92, 1)
+        for y, colour in ((77, white), (83, blue), (138, blue), (150, blue), (166, blue), (172, white)):
+            with self.subTest(y=y):
+                self.assertEqual(picture.pixel(390, y), colour)
+        # Changes below the line move with the content.
+        self.assertAlmostEqual(next(page.annots()).rect.y0, 300 - 0.02 * 842 + 28.8, delta=2)
+        self.assertEqual(page.rect.height, 842)  # there was room, so the page kept its size
+
+    def test_a_growing_value_never_splits_the_label_on_its_row_or_duplicates_text(self):
+        import pymupdf
+
+        doc = pymupdf.open()
+        page = doc.new_page()
+        rows = [("Taxpayer's Name", "RATUL HASAN"), ("Identification Number (TIN)", "840710566414"), ("Father's Name", "Late Md. Abu Daud")]
+        for index, (label, value) in enumerate(rows):
+            y = 100 + 18 * index
+            page.insert_text((72, y), label, fontsize=12)
+            page.insert_text((320, y), value, fontsize=12)
+        source = self.folder / "form.pdf"
+        doc.save(source)
+        value = next(line for line in self._lines(source) if line["text"] == "840710566414")
+        grown = {**self._retype(value, "840710566414\n9934093945\n3488888934"), "cut": value["flow"], "width": 0.4, "grow": 28.8}
+        output = self.folder / "out.pdf"
+
+        pdf_tools.edit([source], output, {"edits": [grown]})
+
+        page = self._open(output)[0]
+        origins = {span["text"]: span["origin"][1] for span in self._spans(output)}
+        # The label beside the edited value stays whole, on its own row.
+        self.assertAlmostEqual(origins["Identification Number (TIN)"], 118, delta=0.5)
+        self.assertAlmostEqual(origins["Father's Name"], 136 + 28.8, delta=0.5)
+        self.assertAlmostEqual(origins["Late Md. Abu Daud"], 136 + 28.8, delta=0.5)
+        # Every line's text exists once, not once per moved band.
+        text = page.get_text()
+        for label, _value in rows:
+            self.assertEqual(text.count(label), 1, label)
+
+    def test_the_page_gets_taller_when_pushed_content_would_fall_off(self):
+        import pymupdf
+
+        doc = pymupdf.open()
+        page = doc.new_page(width=300, height=200)
+        page.insert_text((20, 40), "Top line", fontsize=12)
+        page.insert_text((20, 190), "Bottom line", fontsize=12)
+        source = self.folder / "short.pdf"
+        doc.save(source)
+        output = self.folder / "out.pdf"
+        grown = {**self._retype(self._line(source, "Top"), "Top line\n" * 5), "grow": 72.0, "width": 0.8}
+
+        pdf_tools.edit([source], output, {"edits": [grown]})
+
+        page = self._open(output)[0]
+        self.assertGreater(page.rect.height, 200 + 60)
+        bottom = next(span for span in self._spans(output) if span["text"] == "Bottom line")
+        self.assertAlmostEqual(bottom["origin"][1], 190 + 72, delta=0.6)
+
+    def test_bengali_text_is_cleaned_and_uses_a_shaping_font(self):
+        self.assertEqual(pdf_tools.clean_text("মোঃঃ স্ত্রীী প্রতিষ্ঠাান"), "মোঃ স্ত্রী প্রতিষ্ঠান")
+        self.assertEqual(edit_fonts.script_families("নাম Name", "sans"), ["Noto Sans Bengali"])
+        self.assertEqual(edit_fonts.script_families("Name", "sans"), [])
+        self.assertTrue(edit_fonts.is_complex(ord("ম")))
+        self.assertFalse(edit_fonts.is_complex(ord("M")))
+        self.assertEqual(edit_fonts.family_font.__name__, "family_font")
+        self.assertEqual(edit_fonts.SUBSTITUTES["solaimanlipi"], "Noto Sans Bengali")
+
+    def test_deleting_a_line_closes_up_the_space_but_never_cuts_a_table(self):
+        import pymupdf
+
+        doc = pymupdf.open()
+        page = doc.new_page()
+        for number, y in enumerate((100, 121, 142, 163)):
+            page.insert_text((72, y), f"Line {number + 1}", fontsize=12)
+        # A one-row table under the lines: its cells must never collapse.
+        page.draw_rect(pymupdf.Rect(60, 190, 400, 230), color=(0, 0, 0))
+        page.insert_text((72, 214), "Cell A", fontsize=12)
+        page.insert_text((200, 214), "Cell B", fontsize=12)
+        source = self.folder / "lines.pdf"
+        doc.save(source)
+        lines = {line["text"]: line for line in self._lines(source)}
+        self.assertAlmostEqual(lines["Line 2"]["collapse"], 21, delta=0.1)
+        self.assertEqual(lines["Cell A"]["collapse"], 0)  # cutting it would break the table
+        # The last line before the table frees one line's slot, keeping the space above the table.
+        self.assertAlmostEqual(lines["Line 4"]["collapse"], 21, delta=0.1)
+
+        output = self.folder / "out.pdf"
+        deleted = {**self._retype(lines["Line 2"], ""), "grow": -lines["Line 2"]["collapse"]}
+        pdf_tools.edit([source], output, {"edits": [deleted]})
+
+        origins = {span["text"]: span["origin"][1] for span in self._spans(output)}
+        self.assertNotIn("Line 2", origins)
+        self.assertAlmostEqual(origins["Line 1"], 100, delta=0.5)
+        self.assertAlmostEqual(origins["Line 3"], 121, delta=0.5)
+        self.assertAlmostEqual(origins["Cell A"], 214 - 21, delta=0.5)
+
+    def test_retyped_bangla_copies_out_as_real_text(self):
+        source = self._invoice()
+        output = self.folder / "out.pdf"
+        new = {"type": "text", "page": 1, "x": 0.1, "baseline": 0.5, "text": "নামঃ মোঃ রাতুল হাসান\nকিশোর স্ত্রী প্রতিষ্ঠান",
+               "size": 14, "color": "#123456", "family": "Arial", "generic": "sans", "ref": None}
+
+        with override_settings(EDIT_FONT_DOWNLOADS=True):
+            pdf_tools.edit([source], output, {"edits": [new]})
+
+        page = self._open(output)[0]
+        text = page.get_text()
+        if "রাতুল" not in text:
+            self.skipTest("No Bangla font available offline; shaped text falls back to plain drawing.")
+        self.assertIn("নামঃ মোঃ রাতুল হাসান", text)
+        self.assertIn("কিশোর স্ত্রী প্রতিষ্ঠান", text)
+        self.assertEqual(len(page.search_for("রাতুল")), 1)
+
+    def test_an_outdated_worker_refuses_instead_of_saving_old_behaviour(self):
+        from .tasks import EDIT_ENGINE, OUTDATED_WORKER, _edit_with_current_engine
+
+        source = self._invoice()
+        edit = {"type": "whiteout", "page": 1, "x": 0, "y": 0, "w": 0.1, "h": 0.1}
+        with self.assertRaisesMessage(ValueError, OUTDATED_WORKER):
+            _edit_with_current_engine([source], self.folder / "a.pdf", {"edits": [edit], "engine": "older"})
+        result = _edit_with_current_engine([source], self.folder / "b.pdf", {"edits": [edit], "engine": EDIT_ENGINE})
+        self.assertEqual(result, {"edits": 1})
+
+    def test_find_and_replace_works_across_every_page(self):
+        import pymupdf
+
+        doc = pymupdf.open()
+        for number in range(3):
+            doc.new_page().insert_text((72, 100), f"Page {number + 1}: ACME Ltd owes 100 USD", fontsize=12)
+        source = self.folder / "many.pdf"
+        doc.save(source)
+        output = self.folder / "out.pdf"
+
+        result = pdf_tools.edit([source], output, {"edits": [{"type": "replace", "find": "acme", "replace": "Globex"}]})
+
+        self.assertEqual(result, {"edits": 1, "replaced": 3})
+        for page in self._open(output):
+            self.assertIn("Globex Ltd owes 100 USD", page.get_text())
+            self.assertNotIn("ACME", page.get_text())
+        with self.assertRaisesMessage(ValueError, "No text matched"):
+            pdf_tools.edit([source], output, {"edits": [{"type": "replace", "find": "absent", "replace": "x"}]})
+
+    def test_shapes_markup_notes_links_and_images(self):
+        import pymupdf
+
+        source = self._invoice()
+        picture = self.folder / "logo.png"
+        pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 20, 10), False).save(picture)
+        box = {"page": 1, "x": 0.1, "y": 0.1, "w": 0.4, "h": 0.03}
+        edits = [
+            {**box, "type": "whiteout", "y": 0.6},
+            {**box, "type": "highlight", "color": "#ffd43b"},
+            {**box, "type": "underline", "color": "#2748d6"},
+            {**box, "type": "strikeout", "color": "#d92d20"},
+            {**box, "type": "rect", "y": 0.5, "color": "#ff0000", "fill": "#00ff00", "stroke": 3},
+            {**box, "type": "ellipse", "y": 0.7, "color": "#0000ff"},
+            {"type": "arrow", "page": 1, "x1": 0.1, "y1": 0.9, "x2": 0.5, "y2": 0.9, "color": "#ff00ff", "stroke": 2},
+            {"type": "draw", "page": 1, "points": [[0.1, 0.8], [0.2, 0.85]], "color": "#00ffff", "stroke": 2},
+            {"type": "note", "page": 1, "x": 0.9, "y": 0.1, "text": "Check this total", "color": "#ffd43b"},
+            {**box, "type": "link", "y": 0.3, "url": "https://example.com/pay"},
+            {**box, "type": "image", "x": 0.6, "image": 0},
+        ]
+        output = self.folder / "out.pdf"
+
+        pdf_tools.edit([source, picture], output, {"edits": edits})
+
+        page = self._open(output)[0]
+        self.assertEqual(sorted(annot.type[1] for annot in page.annots()), ["Highlight", "StrikeOut", "Text", "Underline"])
+        self.assertEqual([link["uri"] for link in page.get_links()], ["https://example.com/pay"])
+        self.assertEqual(len(page.get_images()), 1)
+        colors = {drawing.get("color") for drawing in page.get_drawings()}
+        self.assertTrue({(1.0, 0.0, 0.0), (0.0, 0.0, 1.0), (1.0, 0.0, 1.0), (0.0, 1.0, 1.0)} <= colors)
+        self.assertIn((0.0, 1.0, 0.0), {drawing.get("fill") for drawing in page.get_drawings()})
+
+    def test_pages_can_be_rotated_and_deleted_and_there_is_no_page_limit(self):
+        import pymupdf
+
+        doc = pymupdf.open()
+        for number in range(600):  # more than the other tools allow
+            doc.new_page().insert_text((72, 100), f"Page {number + 1}", fontsize=12)
+        source = self.folder / "long.pdf"
+        doc.save(source)
+        output = self.folder / "out.pdf"
+        edits = [
+            {"type": "rotate-page", "page": 2, "degrees": 90},
+            {"type": "delete-page", "page": 1},
+            {"type": "whiteout", "page": 600, "x": 0, "y": 0, "w": 0.1, "h": 0.1},
+        ]
+
+        pdf_tools.edit([source], output, {"edits": edits})
+
+        edited = self._open(output)
+        self.assertEqual(edited.page_count, 599)
+        self.assertEqual((edited[0].get_text().strip(), edited[0].rotation), ("Page 2", 90))
+        with self.assertRaisesMessage(ValueError, "Keep at least one"):
+            pdf_tools.edit([self._invoice()], output, {"edits": [{"type": "delete-page", "page": 1}]})
+
+    def test_edits_must_point_at_real_pages_and_images(self):
+        source = self._invoice()
+        output = self.folder / "out.pdf"
+        with self.assertRaisesMessage(ValueError, "Page 4 does not exist"):
+            pdf_tools.edit([source], output, {"edits": [{"type": "whiteout", "page": 4, "x": 0, "y": 0, "w": 0.1, "h": 0.1}]})
+        with self.assertRaisesMessage(ValueError, "images you added is missing"):
+            pdf_tools.edit([source], output, {"edits": [{"type": "image", "page": 1, "x": 0, "y": 0, "w": 0.1, "h": 0.1, "image": 0}]})
+
+    def test_font_names_are_understood(self):
+        cases = {
+            "ABCDEF+TimesNewRomanPS-BoldItalicMT": ("Times New Roman", 700, True),
+            "ArialMT": ("Arial", 400, False),
+            "Calibri,Bold": ("Calibri", 700, False),
+            "OpenSans-SemiBold": ("Open Sans", 600, False),
+            "Roboto-LightItalic": ("Roboto", 300, True),
+            "QABWXL+Calibri Regular": ("Calibri", 400, False),
+        }
+        for name, expected in cases.items():
+            with self.subTest(name=name):
+                self.assertEqual(edit_fonts.parse_font_name(name), expected)
+        self.assertEqual(edit_fonts.name_key("URW Bookman Light"), edit_fonts.name_key("ABCDEF+URWBookman-Light"))
+
+    def test_text_runs_follow_each_fonts_characters(self):
+        html = edit_fonts.runs_html("ab  c\nমো", [("pdf-font", {ord("a")}), ("full-font", {ord("b"), ord(" ")})])
+        self.assertEqual(
+            html,
+            '<span style="font-family: pdf-font">a</span>'
+            '<span style="font-family: full-font">b&nbsp;&nbsp;</span>c<br>মো',
+        )
+
+    def test_fonts_come_from_the_cache_without_the_network(self):
+        cache = Path(settings.MEDIA_ROOT) / "font-cache"
+        cache.mkdir(parents=True)
+        (cache / "Carlito-700-0.ttf").write_bytes(b"carlito bold")
+
+        self.assertEqual(edit_fonts.family_font("Calibri", 700, False, "sans"), (b"carlito bold", "Carlito"))
+        self.assertEqual(edit_fonts.family_font("Unknown Font", 400, False, "serif"), (None, None))
+        self.assertTrue((cache / "Tinos-400-0.missing").exists())
+
+    def test_the_endpoint_rejects_malformed_changes(self):
+        from .views import _edit_problem
+
+        text = {"type": "text", "page": 1, "x": 0.1, "baseline": 0.1, "text": "hi", "size": 12, "family": "Open Sans", "ref": 12}
+        draw = {"type": "draw", "page": 1, "points": [[0.1, 0.1]], "color": "#000000"}
+        self.assertIsNone(_edit_problem([text, draw, {"type": "replace", "find": "a", "replace": "b"}], 0))
+        cases = [
+            ([], "at least one change"),
+            ("nope", "at least one change"),
+            ([{**text, "type": "script"}], "aren't valid"),
+            ([{**text, "color": "red; background: url(x)"}], "aren't valid"),
+            ([{**text, "family": "x}</style><script>"}], "aren't valid"),
+            ([{**text, "ref": "12"}], "aren't valid"),
+            ([{**text, "text": "x" * 5001}], "aren't valid"),
+            ([{**text, "size": "nan"}], "aren't valid"),
+            ([{**text, "source": {"x": 0, "y": 0, "w": "inf", "h": 1}}], "aren't valid"),
+            ([{**draw, "points": [[0.1]]}], "aren't valid"),
+            ([{"type": "replace", "find": " "}], "text you want to find"),
+            ([{"type": "link", "page": 1, "x": 0, "y": 0, "w": 0.1, "h": 0.1, "url": "javascript:alert(1)"}], "Links must"),
+            ([{"type": "rotate-page", "page": 1, "degrees": 45}], "aren't valid"),
+            ([{"type": "image", "page": 1, "x": 0, "y": 0, "w": 0.1, "h": 0.1, "image": 1}], "missing"),
+            ([draw] * 5001, "more than 5000"),
+            ([{**draw, "points": [[0.1, 0.1]] * 5000}] * 21, "too detailed"),
+        ]
+        for edits, message in cases:
+            with self.subTest(message=message):
+                self.assertIn(message, _edit_problem(edits, 1))
+
+
+@override_settings(EDIT_FONT_DOWNLOADS=False)
+class EditSessionTests(SimpleTestCase):
+    """Open once, then load pages and fonts as they are viewed."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        media = override_settings(MEDIA_ROOT=directory.name)
+        media.enable()
+        self.addCleanup(media.disable)
+        for name in ("check_guest_preview_rate", "check_guest_hourly"):
+            patcher = patch(f"api.views.{name}", return_value=True)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.client = APIClient()
+
+    def _upload(self, pages=700):
+        import pymupdf
+
+        doc = pymupdf.open()
+        for number in range(pages):
+            page = doc.new_page()
+            page.insert_font(fontname="F1", fontbuffer=_test_font())
+            page.insert_text((72, 100), f"Invoice {number}", fontname="F1", fontsize=12)
+        doc.subset_fonts()
+        data = doc.tobytes()
+        return self.client.post(
+            reverse("edit-open"), {"files": SimpleUploadedFile("big.pdf", data, "application/pdf")}, format="multipart"
+        )
+
+    def test_any_length_of_pdf_opens_and_pages_load_on_demand(self):
+        opened = self._upload()
+        self.assertEqual(opened.status_code, 200, opened.content)
+        session = opened.json()["session"]
+        self.assertEqual(len(opened.json()["pages"]), 700)
+
+        page = self.client.get(reverse("edit-page", args=[session, 650]), {"text": "1", "dpi": "40"})
+        self.assertEqual(page.status_code, 200)
+        line = page.json()["lines"][0]
+        self.assertEqual(line["text"], "Invoice 649")
+        self.assertTrue(page.json()["image"].startswith("data:image/jpeg;base64,"))
+
+        font = self.client.get(reverse("edit-font", args=[session, line["font"]["ref"]]), {"page": 650})
+        self.assertEqual(font.status_code, 200)
+        self.assertTrue({ord(char) for char in "Invoice 649"} <= edit_fonts.coverage(font.content))
+
+        found = self.client.get(reverse("edit-search", args=[session]), {"q": "invoice 69"})
+        self.assertEqual(found.json()["total"], 11)  # 69 and 690-699
+
+    def test_unknown_sessions_are_refused(self):
+        self.assertEqual(self.client.get(reverse("edit-page", args=["0" * 32, 1])).status_code, 404)
+        self.assertEqual(self.client.get(reverse("edit-page", args=["not-a-session", 1])).status_code, 404)
+        self.assertEqual(self.client.get(reverse("edit-search", args=["x" * 32]), {"q": "a"}).status_code, 404)
 
 
 class OfficeToolsTests(SimpleTestCase):

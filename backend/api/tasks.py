@@ -12,7 +12,7 @@ from django.conf import settings
 from django.db.models import Q
 from django.utils import timezone
 
-from . import office_tools, pdf_tools
+from . import edit_fonts, office_tools, pdf_tools
 from .models import Job
 from .pdf_structure import render_html, render_markdown
 
@@ -1679,6 +1679,39 @@ def redact_pdf_task(self, job_id):
     return _run_tool(
         job_id, pdf_tools.redact, ".pdf", private_options=("terms", "patterns", "boxes")
     )
+
+
+def _engine_fingerprint():
+    """A fingerprint of the editing code this process loaded."""
+    import hashlib
+
+    digest = hashlib.sha256()
+    for module in (pdf_tools, edit_fonts):
+        digest.update(Path(module.__file__).read_bytes())
+    return digest.hexdigest()[:16]
+
+
+# Fixed when the process starts. The web server stamps each edit job with its
+# own; a worker started before the code changed would otherwise quietly save
+# with old behaviour (Celery doesn't reload code by itself).
+EDIT_ENGINE = _engine_fingerprint()
+OUTDATED_WORKER = (
+    "The background worker is running an older version of the editor. "
+    "Restart the Celery worker, then save again."
+)
+
+
+def _edit_with_current_engine(inputs, output, options):
+    engine = options.get("engine")
+    if engine and engine != EDIT_ENGINE:
+        raise ValueError(OUTDATED_WORKER)
+    return pdf_tools.edit(inputs, output, options)
+
+
+# Long documents with find & replace can take a while; same budget as OCR.
+@shared_task(bind=True, autoretry_for=(), max_retries=0, soft_time_limit=570, time_limit=600)
+def edit_pdf_task(self, job_id):
+    return _run_tool(job_id, _edit_with_current_engine, ".pdf", private_options=("edits",))
 
 
 @shared_task(bind=True, autoretry_for=(), max_retries=0)

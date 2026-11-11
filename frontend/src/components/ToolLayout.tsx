@@ -11,6 +11,7 @@ import {
     Loader2,
     RotateCcw,
     ShieldCheck,
+    Sparkles,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { apiUrl } from "@/lib/api";
@@ -28,8 +29,18 @@ export function ToolIcon({ tool, size = "md" }: { tool: Tool; size?: "sm" | "md"
     const box = { sm: "w-9 h-9", md: "w-11 h-11", lg: "w-14 h-14" }[size];
     const glyph = { sm: "w-4 h-4", md: "w-5 h-5", lg: "w-6 h-6" }[size];
     return (
-        <span className={`chip-${tool.category} ${box} rounded-xl inline-flex items-center justify-center shrink-0`}>
+        <span className={`${tool.featured ? "chip-featured" : `chip-${tool.category}`} ${box} rounded-xl inline-flex items-center justify-center shrink-0`}>
             <Icon className={glyph} strokeWidth={2} aria-hidden />
+        </span>
+    );
+}
+
+/** Marks a feature that other PDF apps charge for. */
+export function FreeBadge({ className = "" }: { className?: string }) {
+    return (
+        <span className={`free-badge inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold tracking-normal text-white ${className}`}>
+            <Sparkles className="w-3 h-3" aria-hidden />
+            Free here · usually paid
         </span>
     );
 }
@@ -62,6 +73,10 @@ function resultSummary(result: Job["result"]): string {
         return result.text_pages > 0
             ? `Text found on ${result.text_pages} of ${plural(result.pages ?? 0, "page")}. You can now search and copy it.`
             : "We couldn't find any readable text. Check the language you chose, or try a clearer scan.";
+    }
+    if (result.edits !== undefined) {
+        const replaced = result.replaced ? ` ${plural(result.replaced, "word")} replaced.` : "";
+        return `${plural(result.edits, "change")} saved, with no watermark added.${replaced}`;
     }
     if (result.pages !== undefined) return `Your new PDF has ${plural(result.pages, "page")}.`;
     return fallback;
@@ -191,11 +206,14 @@ type ToolLayoutProps = {
     run: ToolRun;
     /** Called on Start over or Try again, so the tool can clear its own state. */
     onReset?: () => void;
-    wide?: boolean;
+    /** "xl" is for editors that need the whole screen. */
+    wide?: boolean | "xl";
+    /** Keep the tool mounted (hidden) while a job runs, so an editor keeps its work. */
+    persistent?: boolean;
     children: ReactNode;
 };
 
-export default function ToolLayout({ slug, run, onReset, wide, children }: ToolLayoutProps) {
+export default function ToolLayout({ slug, run, onReset, wide, persistent, children }: ToolLayoutProps) {
     const tool = tools.find((item) => item.slug === slug);
     if (!tool) return null;
 
@@ -205,7 +223,7 @@ export default function ToolLayout({ slug, run, onReset, wide, children }: ToolL
     }
 
     return (
-        <main className={`mx-auto px-4 sm:px-6 py-8 md:py-12 ${wide ? "max-w-4xl" : "max-w-2xl"}`}>
+        <main className={`mx-auto px-4 sm:px-6 py-8 md:py-12 ${wide === "xl" ? "max-w-6xl" : wide ? "max-w-4xl" : "max-w-2xl"}`}>
             <nav aria-label="Breadcrumb" className="flex items-center gap-1 text-sm text-ink-3 mb-5">
                 <Link href="/#tools" className="hover:text-ink transition-colors">
                     All tools
@@ -217,12 +235,19 @@ export default function ToolLayout({ slug, run, onReset, wide, children }: ToolL
             <header className="flex items-start gap-4 mb-7">
                 <ToolIcon tool={tool} size="lg" />
                 <div>
-                    <h1 className="text-3xl md:text-4xl font-semibold tracking-tight">{tool.name}</h1>
+                    <h1 className="text-3xl md:text-4xl font-semibold tracking-tight flex flex-wrap items-center gap-x-3 gap-y-2">
+                        {tool.name}
+                        {tool.featured && <FreeBadge />}
+                    </h1>
                     <p className="text-ink-2 mt-1.5 leading-relaxed">{tool.blurb}</p>
                 </div>
             </header>
 
-            {run.phase === "idle" && <div className="rise">{children}</div>}
+            {persistent ? (
+                <div className={run.phase === "idle" ? "rise" : "hidden"}>{children}</div>
+            ) : (
+                run.phase === "idle" && <div className="rise">{children}</div>
+            )}
             {(run.phase === "uploading" || run.phase === "processing") && <RunningPanel run={run} />}
             {run.phase === "done" && <DonePanel run={run} tool={tool} onReset={reset} />}
             {run.phase === "failed" && <FailedPanel run={run} onRetry={reset} />}

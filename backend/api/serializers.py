@@ -101,5 +101,7 @@ class JobSerializer(serializers.ModelSerializer):
             "words_removed",
             "pages_changed",
             "text_pages",
+            "edits",
+            "replaced",
         )
         return {key: options[key] for key in keys if key in options} or None

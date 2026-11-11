@@ -61,6 +61,7 @@ class Job(models.Model):
         ("excel-to-pdf", "Excel to PDF"),
         ("powerpoint-to-pdf", "PowerPoint to PDF"),
         ("ocr", "OCR PDF"),
+        ("edit", "Edit PDF"),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

@@ -8,6 +8,7 @@ import {
     FileInput,
     FileMinus,
     FileOutput,
+    FilePen,
     FileSpreadsheet,
     FileStack,
     FileText,
@@ -42,9 +43,24 @@ export type Tool = {
     category: ToolCategory;
     steps: [string, string, string];
     related: string[];
+    /** Promoted everywhere: its own colour, a wide card and a "Free" badge. */
+    featured?: boolean;
 };
 
 export const tools: Tool[] = [
+    {
+        slug: "edit-pdf",
+        jobKey: "edit",
+        endpoint: "/tools/edit/",
+        name: "Edit PDF",
+        description: "Change text in its own font, draw, add images.",
+        blurb: "Edit the text already in your PDF in its original font, find and replace on every page, add text, images, shapes, notes and links. Any length, free, no watermark.",
+        icon: FilePen,
+        category: "organize",
+        steps: ["Add your PDF, of any length", "Click any line to retype it in its own font, or add text, shapes and images", "Download your edited PDF"],
+        related: ["sign-pdf", "fill-pdf-form", "compress-pdf"],
+        featured: true,
+    },
     {
         slug: "merge-pdf",
         jobKey: "merge",
@@ -422,10 +438,10 @@ export const categoryBlurbs: Record<ToolCategory, string> = {
     secure: "Passwords, signatures, watermarks and redaction.",
 };
 
-export const popularSlugs = ["merge-pdf", "compress-pdf", "pdf-to-word", "word-to-pdf", "sign-pdf", "split-pdf"];
+export const popularSlugs = ["edit-pdf", "merge-pdf", "compress-pdf", "pdf-to-word", "word-to-pdf", "sign-pdf", "split-pdf"];
 
 /** Shown with a "New" badge on the home page. */
-export const newSlugs = ["word-to-pdf", "excel-to-pdf", "powerpoint-to-pdf", "ocr-pdf"];
+export const newSlugs = ["edit-pdf", "word-to-pdf", "excel-to-pdf", "powerpoint-to-pdf", "ocr-pdf"];
 
 export function getToolBySlug(slug: string): Tool | undefined {
     return tools.find((tool) => tool.slug === slug);

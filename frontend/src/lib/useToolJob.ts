@@ -28,6 +28,8 @@ export type Job = {
         words_removed?: number;
         pages_changed?: number;
         text_pages?: number;
+        edits?: number;
+        replaced?: number;
     } | null;
 };
 

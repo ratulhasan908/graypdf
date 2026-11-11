@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import { ArrowUpRight, Search, X } from "lucide-react";
-import { ToolIcon } from "@/components/ToolLayout";
+import { ArrowRight, ArrowUpRight, Search, X } from "lucide-react";
+import { FreeBadge, ToolIcon } from "@/components/ToolLayout";
 import { categories, categoryBlurbs, newSlugs, Tool, ToolCategory, tools } from "@/lib/tools";
 
 function ToolCard({ tool }: { tool: Tool }) {
@@ -33,6 +33,28 @@ function ToolCard({ tool }: { tool: Tool }) {
     );
 }
 
+/** A wide, framed card for the tools we want everyone to notice. */
+function FeaturedCard({ tool }: { tool: Tool }) {
+    return (
+        <Link href={`/tools/${tool.slug}`} className="tool-card featured-frame group block rounded-[1.25rem]">
+            <span className="flex flex-col sm:flex-row sm:items-center gap-4 sm:gap-5 rounded-[calc(1.25rem-2px)] bg-surface p-5 sm:p-6">
+                <ToolIcon tool={tool} size="lg" />
+                <span className="flex-1 min-w-0">
+                    <span className="flex flex-wrap items-center gap-2">
+                        <span className="text-xl font-semibold">{tool.name}</span>
+                        <FreeBadge />
+                    </span>
+                    <span className="block text-ink-2 mt-1.5 leading-snug">{tool.blurb}</span>
+                </span>
+                <span className="btn chip-featured rounded-xl! font-semibold shrink-0 self-start sm:self-center">
+                    Edit a PDF
+                    <ArrowRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" aria-hidden />
+                </span>
+            </span>
+        </Link>
+    );
+}
+
 export default function ToolBrowser() {
     const [query, setQuery] = useState("");
     const [category, setCategory] = useState<ToolCategory | "all">("all");
@@ -51,6 +73,8 @@ export default function ToolBrowser() {
     // With no search, "All tools" is grouped by category so 30 tools are easy to scan.
     const grouped = category === "all" && !needle;
     const groups = categories.filter((item) => item.id !== "all") as { id: ToolCategory; name: string }[];
+    const featured = results.filter((tool) => tool.featured);
+    const regular = results.filter((tool) => !tool.featured);
 
     return (
         <section id="tools" aria-labelledby="tools-heading" className="scroll-mt-20">
@@ -103,30 +127,43 @@ export default function ToolBrowser() {
                         Clear search
                     </button>
                 </div>
-            ) : grouped ? (
-                <div className="space-y-12">
-                    {groups.map((group) => (
-                        <div key={group.id}>
-                            <div className="flex items-baseline gap-3 mb-4 flex-wrap">
-                                <h3 className="text-lg font-semibold">{group.name}</h3>
-                                <p className="text-sm text-ink-3">{categoryBlurbs[group.id]}</p>
-                            </div>
-                            <ul className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                                {tools
-                                    .filter((tool) => tool.category === group.id)
-                                    .map((tool) => (
-                                        <ToolCard key={tool.slug} tool={tool} />
-                                    ))}
-                            </ul>
-                        </div>
-                    ))}
-                </div>
             ) : (
-                <ul className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                    {results.map((tool) => (
-                        <ToolCard key={tool.slug} tool={tool} />
-                    ))}
-                </ul>
+                <>
+                    {featured.length > 0 && (
+                        <ul className="space-y-3 mb-10">
+                            {featured.map((tool) => (
+                                <li key={tool.slug}>
+                                    <FeaturedCard tool={tool} />
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                    {grouped ? (
+                        <div className="space-y-12">
+                            {groups.map((group) => (
+                                <div key={group.id}>
+                                    <div className="flex items-baseline gap-3 mb-4 flex-wrap">
+                                        <h3 className="text-lg font-semibold">{group.name}</h3>
+                                        <p className="text-sm text-ink-3">{categoryBlurbs[group.id]}</p>
+                                    </div>
+                                    <ul className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                                        {regular
+                                            .filter((tool) => tool.category === group.id)
+                                            .map((tool) => (
+                                                <ToolCard key={tool.slug} tool={tool} />
+                                            ))}
+                                    </ul>
+                                </div>
+                            ))}
+                        </div>
+                    ) : (
+                        <ul className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                            {regular.map((tool) => (
+                                <ToolCard key={tool.slug} tool={tool} />
+                            ))}
+                        </ul>
+                    )}
+                </>
             )}
         </section>
     );

@@ -277,12 +277,79 @@ body {
   50% { opacity: 0.55; }
 }
 
+/* ---------- Edit PDF, the featured tool ---------- */
+
+/* Its own hot colour, so it never blends in with the four categories. */
+.chip-featured {
+  color: #fff;
+  background: linear-gradient(140deg, #ff7a3d, #e8287a 55%, #8b3df0);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 6px 16px -6px rgba(232, 40, 122, 0.75);
+}
+
+.free-badge {
+  background: linear-gradient(100deg, #ff7a3d, #e8287a, #8b3df0, #e8287a, #ff7a3d);
+  background-size: 250% 100%;
+  animation: shine 7s linear infinite;
+  box-shadow: 0 6px 16px -8px rgba(232, 40, 122, 0.85);
+}
+
+.text-hot {
+  background: linear-gradient(100deg, #ff9a5c, #ff5fa2 45%, #b88cff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* A gradient frame that slowly turns around the featured card. */
+@property --frame-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.featured-frame {
+  padding: 2px;
+  background: conic-gradient(from var(--frame-angle), #ff7a3d, #e8287a, #8b3df0, #5b8cff, #ff7a3d);
+  animation: frame-turn 6s linear infinite;
+  box-shadow: 0 22px 44px -22px rgba(232, 40, 122, 0.6);
+}
+
+@keyframes frame-turn {
+  to { --frame-angle: 360deg; }
+}
+
+.edit-spotlight {
+  background:
+    radial-gradient(36rem 22rem at 100% 0%, rgba(255, 122, 61, 0.42), transparent 60%),
+    radial-gradient(34rem 24rem at 0% 100%, rgba(139, 61, 240, 0.55), transparent 60%),
+    radial-gradient(26rem 18rem at 55% 55%, rgba(232, 40, 122, 0.3), transparent 70%),
+    #0b0a1c;
+  color: #fff;
+}
+
+.nav-edit {
+  background: linear-gradient(100deg, rgba(255, 122, 61, 0.14), rgba(232, 40, 122, 0.14), rgba(139, 61, 240, 0.14));
+  border: 1px solid rgba(232, 40, 122, 0.28);
+}
+.nav-edit:hover { border-color: rgba(232, 40, 122, 0.55); }
+
+@keyframes blink {
+  50% { opacity: 0; }
+}
+.caret { animation: blink 1s steps(1) infinite; }
+
+@keyframes ping-soft {
+  75%, 100% { transform: scale(2); opacity: 0; }
+}
+.ping-soft { animation: ping-soft 1.8s cubic-bezier(0, 0, 0.2, 1) infinite; }
+
 .rise { animation: rise 220ms ease-out both; }
 .sweep { animation: sweep 1.3s ease-in-out infinite; }
 .skeleton { background: var(--surface-2); border-radius: 0.5rem; animation: shimmer 1.4s ease-in-out infinite; }
 
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
-  .rise, .sweep, .skeleton, .float, .float-slow, .text-shine, .marquee, .hero-dark .aurora { animation: none; }
+  .rise, .sweep, .skeleton, .float, .float-slow, .text-shine, .marquee, .hero-dark .aurora,
+  .free-badge, .featured-frame, .caret, .ping-soft { animation: none; }
   .tool-card, .tool-card:hover { transform: none; }
 }

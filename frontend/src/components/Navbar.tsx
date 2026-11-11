@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronDown, LayoutDashboard, LogOut } from "lucide-react";
+import { ChevronDown, FilePen, LayoutDashboard, LogOut } from "lucide-react";
 import Logo from "@/components/Logo";
 import { useAuth } from "@/context/AuthContext";
 
@@ -103,6 +103,14 @@ export default function Navbar() {
                         <Logo />
                     </Link>
                     <nav aria-label="Main" className="hidden md:flex items-center gap-0.5 text-sm">
+                        <Link
+                            href="/tools/edit-pdf"
+                            className="nav-edit h-9 inline-flex items-center gap-1.5 px-3 mr-1 rounded-lg font-medium text-ink transition-colors"
+                        >
+                            <FilePen className="w-4 h-4 text-[#e8287a]" aria-hidden />
+                            Edit PDF
+                            <span className="free-badge text-[10px] font-bold tracking-wide text-white rounded-full px-1.5 py-px">FREE</span>
+                        </Link>
                         <Link href="/#tools" className={navLink}>
                             Tools
                         </Link>
