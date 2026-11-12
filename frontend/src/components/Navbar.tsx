@@ -96,12 +96,11 @@ export default function Navbar() {
 
     return (
         <header className="sticky top-0 z-40 px-3 sm:px-4 pt-3">
-            <div className="nav-glass max-w-6xl mx-auto h-14 rounded-2xl pl-4 pr-2 flex items-center justify-between gap-4">
-                <div className="flex items-center gap-5 h-full">
-                    <Link href="/" aria-label="GreyPDF home" className="flex items-center h-full">
-                        <Logo />
-                    </Link>
-                    <nav aria-label="Main" className="hidden md:flex items-center justify-center gap-0.5 text-sm">
+            <div className="nav-glass max-w-6xl mx-auto h-14 rounded-2xl pl-4 pr-2 flex md:grid md:grid-cols-[1fr_auto_1fr] items-center justify-between gap-4">
+                <Link href="/" aria-label="GreyPDF home" className="flex items-center h-full justify-self-start">
+                    <Logo />
+                </Link>
+                <nav aria-label="Main" className="hidden md:flex items-center gap-0.5 text-sm">
                         <Link
                             href="/tools/edit-pdf"
                             className="nav-edit h-9 inline-flex items-center gap-1.5 px-3 mr-1 rounded-lg font-medium text-ink transition-colors"
@@ -125,9 +124,8 @@ export default function Navbar() {
                             </Link>
                         )}
                     </nav>
-                </div>
 
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center justify-end gap-1.5">
                     <GuestAllowance />
                     {loading ? (
                         <div className="w-28 h-9 skeleton" />
