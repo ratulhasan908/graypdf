@@ -15,9 +15,8 @@ function GuestAllowance() {
         <Link
             href="/register"
             title="Sign up free for unlimited files"
-            className={`hidden sm:inline-flex text-xs font-medium px-2.5 py-1 rounded-full transition-colors ${
-                out ? "bg-danger-soft text-danger" : "bg-surface-2 text-ink-2 hover:text-ink"
-            }`}
+            className={`hidden sm:inline-flex text-xs font-medium px-2.5 py-1 rounded-full transition-colors ${out ? "bg-danger-soft text-danger" : "bg-surface-2 text-ink-2 hover:text-ink"
+                }`}
         >
             {usage.remaining} of {usage.limit} files left today
         </Link>
@@ -102,7 +101,7 @@ export default function Navbar() {
                     <Link href="/" aria-label="GreyPDF home" className="flex items-center h-full">
                         <Logo />
                     </Link>
-                    <nav aria-label="Main" className="hidden md:flex items-center gap-0.5 text-sm">
+                    <nav aria-label="Main" className="hidden md:flex items-center justify-center gap-0.5 text-sm">
                         <Link
                             href="/tools/edit-pdf"
                             className="nav-edit h-9 inline-flex items-center gap-1.5 px-3 mr-1 rounded-lg font-medium text-ink transition-colors"
